@@ -40,11 +40,12 @@
             </intent-filter>
         </activity>
 
-        <!-- MainActivity runs as a 2D activity panel inside ImmersiveActivity.
-             Still exported so ImmersiveActivity can start it via an explicit intent.
-             USB_DEVICE_ATTACHED kept here: the OS can attach USB devices regardless of
-             which activity is foreground; the panel will handle the cameras normally. -->
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden" android:launchMode="singleTask">
+        <!-- MainActivity runs as a 2D activity panel inside ImmersiveActivity, which launches it
+             onto the panel's virtual display. That requires android:allowEmbedded="true", and the
+             activity must NOT be singleTask/singleInstance (those launch modes can't be embedded on
+             a virtual display — doing so throws SecurityException "Permission Denial ... with
+             launchDisplayId"). USB_DEVICE_ATTACHED kept so the OS can still route attach events. -->
+        <activity android:name=".MainActivity" android:exported="true" android:allowEmbedded="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>

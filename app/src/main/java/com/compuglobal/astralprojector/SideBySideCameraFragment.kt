@@ -80,6 +80,15 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var dumps = 0
 
+    // Cached application context for resource lookups from lifecycle-independent callbacks.
+    private var appCtx: Context? = null
+
+    /** Resolve a string resource via the application context — never throws if detached. */
+    private fun str(resId: Int, vararg args: Any): String {
+        val c = appCtx ?: context?.applicationContext ?: return ""
+        return if (args.isEmpty()) c.getString(resId) else c.getString(resId, *args)
+    }
+
     // On-screen log overlay (retrievable without ADB or a card reader).
     private var logText: TextView? = null
     private var logScroll: ScrollView? = null
@@ -87,6 +96,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
+        // Cache the application context so status-string lookups from AUSBC camera callbacks don't
+        // crash with "Fragment not attached" when the panel is detached (e.g. immersive app
+        // backgrounded) while cameras keep streaming and firing state callbacks.
+        appCtx = inflater.context.applicationContext
         val root = inflater.inflate(R.layout.fragment_side_by_side, container, false)
         textures = arrayOf(root.findViewById(R.id.textureLeft), root.findViewById(R.id.textureRight))
         statuses = arrayOf(root.findViewById(R.id.statusLeft), root.findViewById(R.id.statusRight))
@@ -97,18 +110,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         logToggle.setOnClickListener {
             val show = logScroll?.visibility != View.VISIBLE
             logScroll?.visibility = if (show) View.VISIBLE else View.GONE
-            logToggle.text = getString(if (show) R.string.log_hide else R.string.log_show)
+            logToggle.text = str(if (show) R.string.log_hide else R.string.log_show)
         }
 
         aspectMode = loadAspectMode()
         val aspectBtn = root.findViewById<TextView>(R.id.aspectToggle)
         aspectToggle = aspectBtn
-        aspectBtn.text = getString(aspectMode.labelRes)
+        aspectBtn.text = str(aspectMode.labelRes)
         aspectBtn.setOnClickListener {
             aspectMode = AspectMode.values()[(aspectMode.ordinal + 1) % AspectMode.values().size]
             FileLogger.log("aspect mode -> $aspectMode")
             saveAspectMode(aspectMode)
-            aspectBtn.text = getString(aspectMode.labelRes)
+            aspectBtn.text = str(aspectMode.labelRes)
             applyAspectToAll()
         }
 
@@ -122,11 +135,11 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         // ImmersiveActivity observes via a change listener and applies to the panel's Followable.
         val followBtn = root.findViewById<TextView>(R.id.headFollowToggle)
         val initialFollow = SpatialControls.isHeadFollowEnabled(requireContext())
-        followBtn.text = getString(if (initialFollow) R.string.head_follow_on else R.string.head_follow_off)
+        followBtn.text = str(if (initialFollow) R.string.head_follow_on else R.string.head_follow_off)
         followBtn.setOnClickListener {
             val next = !SpatialControls.isHeadFollowEnabled(requireContext())
             SpatialControls.setHeadFollowEnabled(requireContext(), next)
-            followBtn.text = getString(if (next) R.string.head_follow_on else R.string.head_follow_off)
+            followBtn.text = str(if (next) R.string.head_follow_on else R.string.head_follow_off)
             FileLogger.log("headFollow -> $next")
         }
         // Pane size settles after first layout (and can change); recompute the transform then.
@@ -171,7 +184,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val d = camera.getUsbDevice()
         FileLogger.log("onCameraAttached ${desc(d)} hasPermission=${safeHasPermission(d)} mapSize=${getCameraMap().size}")
         val idx = firstFreeSlot()
-        if (idx >= 0) setStatus(displayIndexFor(idx), getString(R.string.status_connecting))
+        if (idx >= 0) setStatus(displayIndexFor(idx), str(R.string.status_connecting))
     }
 
     override fun onCameraDetached(camera: MultiCameraClient.Camera) {
@@ -180,7 +193,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         if (idx >= 0) {
             slots[idx] = null
             videoSizes[idx] = null
-            setStatus(displayIndexFor(idx), getString(R.string.status_waiting))
+            setStatus(displayIndexFor(idx), str(R.string.status_waiting))
         }
         runCatching { camera.closeCamera() }.onFailure { FileLogger.log("closeCamera(detach) failed", it) }
     }
@@ -191,7 +204,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val idx = firstFreeSlot()
         if (idx < 0) {
             FileLogger.log("no free slot; ignoring extra camera ${desc(d)}")
-            setStatus(SLOT_COUNT - 1, getString(R.string.status_extra))
+            setStatus(SLOT_COUNT - 1, str(R.string.status_extra))
             runCatching { camera.closeCamera() }
             return
         }
@@ -201,10 +214,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         try {
             FileLogger.log("openCamera slot=$idx display=$displayIdx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
             camera.openCamera(textures[displayIdx], buildRequest())
-            setStatus(displayIdx, getString(R.string.status_opening))
+            setStatus(displayIdx, str(R.string.status_opening))
         } catch (t: Throwable) {
             FileLogger.log("openCamera slot=$idx FAILED", t)
-            setStatus(displayIdx, getString(R.string.status_error, t.message ?: "openCamera threw"))
+            setStatus(displayIdx, str(R.string.status_error, t.message ?: "openCamera threw"))
         }
         requestPermissionForPendingCameras()
     }
@@ -216,7 +229,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             // Real disconnection — clear the slot so the camera can reconnect into a free slot.
             slots[idx] = null
             videoSizes[idx] = null
-            setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
+            setStatus(displayIndexFor(idx), str(R.string.status_disconnected))
         }
         // If idx is in swappingSlots, closeCamera() was called by reopenOnDisplay; leave the
         // slot intact so onCameraState(OPENED) can find the camera via slotOf().
@@ -241,9 +254,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 FileLogger.log("slot=$idx negotiated previewSize=${videoSizes[idx]?.width}x${videoSizes[idx]?.height}")
                 applyAspect(idx)
             }
-            ICameraStateCallBack.State.CLOSED -> setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
+            ICameraStateCallBack.State.CLOSED -> setStatus(displayIndexFor(idx), str(R.string.status_disconnected))
             ICameraStateCallBack.State.ERROR -> {
-                setStatus(displayIndexFor(idx), getString(R.string.status_error, msg ?: "unknown"))
+                setStatus(displayIndexFor(idx), str(R.string.status_error, msg ?: "unknown"))
                 // On hub reset both cameras detach+reattach; the second openCamera often races
                 // with the first camera's libuvc teardown and gets errno -99. Retry with backoff.
                 if (msg?.contains("open") == true && reopenAttempts[idx] < MAX_REOPEN_ATTEMPTS) {
@@ -377,7 +390,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         mainHandler.postDelayed({
             if (slots[logicalIdx] != camera) return@postDelayed  // slot reassigned; skip
             val displayIdx = displayIndexFor(logicalIdx)
-            setStatus(displayIdx, getString(R.string.status_connecting))
+            setStatus(displayIdx, str(R.string.status_connecting))
             runCatching { camera.openCamera(textures[displayIdx], buildRequest()) }
                 .onFailure { FileLogger.log("reopen slot=$logicalIdx attempt=$attempt FAILED", it) }
         }, delay)
@@ -386,7 +399,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     /** Redirects an already-open camera's render target to its (possibly new) display texture. */
     private fun reopenOnDisplay(camera: MultiCameraClient.Camera, logicalIdx: Int) {
         val displayIdx = displayIndexFor(logicalIdx)
-        setStatus(displayIdx, getString(R.string.status_connecting))
+        setStatus(displayIdx, str(R.string.status_connecting))
         // Mark slot as intentionally swapping so onCameraDisConnected doesn't null it out.
         // The slot must stay populated so onCameraState(OPENED) can find the camera via slotOf().
         swappingSlots.add(logicalIdx)
@@ -399,10 +412,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 FileLogger.log("swap reopen slot=$logicalIdx -> display=$displayIdx")
                 camera.setCameraStateCallBack(this)
                 camera.openCamera(textures[displayIdx], buildRequest())
-                setStatus(displayIdx, getString(R.string.status_opening))
+                setStatus(displayIdx, str(R.string.status_opening))
             } catch (t: Throwable) {
                 FileLogger.log("swap reopen slot=$logicalIdx FAILED", t)
-                setStatus(displayIdx, getString(R.string.status_error, t.message ?: "swap reopen threw"))
+                setStatus(displayIdx, str(R.string.status_error, t.message ?: "swap reopen threw"))
             }
         }, SWAP_REOPEN_DELAY_MS)
     }

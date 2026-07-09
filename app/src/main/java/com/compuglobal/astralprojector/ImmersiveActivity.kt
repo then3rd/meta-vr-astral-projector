@@ -1,6 +1,5 @@
 package com.compuglobal.astralprojector
 
-import android.content.Intent
 import android.content.SharedPreferences
 import com.meta.spatial.core.Entity
 import com.meta.spatial.core.Pose
@@ -34,9 +33,9 @@ class ImmersiveActivity : AppSystemActivity() {
 
     override fun registerPanels(): List<PanelRegistration> = listOf(
         // init block is PanelRegistration.(Entity) -> Unit — `this` = the PanelRegistration.
+        // Only ONE panel source may be set; activityClass hosts MainActivity as a 2D panel.
         PanelRegistration(PANEL_ID) { _: Entity ->
             activityClass = MainActivity::class.java
-            panelIntent = Intent(this@ImmersiveActivity, MainActivity::class.java)
         }.config(false) {
             // config block is PanelConfigOptions.() -> Unit — `this` = the options object.
             width = PANEL_WIDTH_M
