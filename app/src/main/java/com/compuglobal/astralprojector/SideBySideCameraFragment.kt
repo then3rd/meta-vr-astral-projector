@@ -52,6 +52,13 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     /** Consecutive open-retry attempts per slot; reset to 0 on successful OPENED. */
     private val reopenAttempts = IntArray(SLOT_COUNT)
 
+    /**
+     * Slots whose closeCamera() was called intentionally by a swap (not a real detach).
+     * onCameraDisConnected skips clearing the slot entry for these so the camera object
+     * stays in the slots array and onCameraState(OPENED) can find it via slotOf().
+     */
+    private val swappingSlots = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+
     /** Negotiated preview size per slot (may differ from the requested one, e.g. 640x480). */
     private val videoSizes = arrayOfNulls<PreviewSize>(SLOT_COUNT)
 
@@ -192,11 +199,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     override fun onCameraDisConnected(camera: MultiCameraClient.Camera) {
         FileLogger.log("onCameraDisConnected ${desc(camera.getUsbDevice())}")
         val idx = slotOf(camera)
-        if (idx >= 0) {
+        if (idx >= 0 && !swappingSlots.contains(idx)) {
+            // Real disconnection — clear the slot so the camera can reconnect into a free slot.
             slots[idx] = null
             videoSizes[idx] = null
             setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
         }
+        // If idx is in swappingSlots, closeCamera() was called by reopenOnDisplay; leave the
+        // slot intact so onCameraState(OPENED) can find the camera via slotOf().
         runCatching { camera.closeCamera() }
     }
 
@@ -364,10 +374,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private fun reopenOnDisplay(camera: MultiCameraClient.Camera, logicalIdx: Int) {
         val displayIdx = displayIndexFor(logicalIdx)
         setStatus(displayIdx, getString(R.string.status_connecting))
+        // Mark slot as intentionally swapping so onCameraDisConnected doesn't null it out.
+        // The slot must stay populated so onCameraState(OPENED) can find the camera via slotOf().
+        swappingSlots.add(logicalIdx)
         runCatching { camera.closeCamera() }.onFailure { FileLogger.log("swap closeCamera failed", it) }
         // Give closeCamera's async teardown (its own HandlerThread) a moment to finish before
         // reopening the same USB control block on a fresh one.
         mainHandler.postDelayed({
+            swappingSlots.remove(logicalIdx)
             try {
                 FileLogger.log("swap reopen slot=$logicalIdx -> display=$displayIdx")
                 camera.setCameraStateCallBack(this)
