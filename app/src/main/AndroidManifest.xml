@@ -18,11 +18,17 @@
          built-in camera HAL (e.g. Quest 2) can still install the app. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- Passthrough: lets the app show the real world behind the camera panel (mixed reality). -->
+    <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
 
     <application android:allowBackup="true" android:icon="@android:drawable/sym_def_app_icon" android:roundIcon="@android:drawable/sym_def_app_icon" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.AstralProjector">
 
         <!-- Horizon OS device support declaration (Quest 2 / 3 / 3S / Pro). -->
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|eureka" />
+
+        <!-- Declares the app handles system overlays/focus while immersive; required for passthrough
+             and for the panel to keep input focus in the compositor. -->
+        <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
 
         <!-- ImmersiveActivity is the launcher. VRFeature inside it activates the Quest VR
              compositor and head-pose tracking. MainActivity is hosted as a panel inside it. -->
