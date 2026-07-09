@@ -25,5 +25,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CameraEyes"
+rootProject.name = "Astral Projector"
 include(":app")

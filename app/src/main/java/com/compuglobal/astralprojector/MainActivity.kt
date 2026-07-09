@@ -1,4 +1,4 @@
-package com.adiglobal.cameraeyes
+package com.compuglobal.astralprojector
 
 import android.Manifest
 import android.content.pm.PackageManager

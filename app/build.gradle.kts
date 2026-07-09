@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.adiglobal.cameraeyes"
+    namespace = "com.compuglobal.astralprojector"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.adiglobal.cameraeyes"
+        applicationId = "com.compuglobal.astralprojector"
         minSdk = 24
         targetSdk = 34
         versionCode = 1

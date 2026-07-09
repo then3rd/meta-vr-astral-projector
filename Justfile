@@ -78,7 +78,7 @@ install-debug:
 
 # Launch the app on a connected device
 run-debug:
-    "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.adiglobal.cameraeyes -c android.intent.category.LAUNCHER 1
+    "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.compuglobal.astralprojector -c android.intent.category.LAUNCHER 1
 
 # List connected Android devices
 devices:

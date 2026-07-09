@@ -59,7 +59,7 @@ Then:
 ## Tuning / troubleshooting
 
 - **Second camera errors or won't open:** almost always USB 2.0 bandwidth. Lower the resolution in
-  [`SideBySideCameraFragment.kt`](app/src/main/java/com/adiglobal/cameraeyes/SideBySideCameraFragment.kt)
+  [`SideBySideCameraFragment.kt`](app/src/main/java/com/compuglobal/astralprojector/SideBySideCameraFragment.kt)
   — change `PREVIEW_WIDTH` / `PREVIEW_HEIGHT` (e.g. to `640` / `480`) and rebuild. MJPEG is the
   UVC strategy's default in 3.2.7, which is required for two streams to share the bus.
 - **No "open" prompt on attach:** confirm the device actually supports USB host mode and the hub is
@@ -67,7 +67,7 @@ Then:
 
 ## Project layout
 
-- [`app/src/main/java/.../MainActivity.kt`](app/src/main/java/com/adiglobal/cameraeyes/MainActivity.kt) — hosts the fragment.
-- [`app/src/main/java/.../SideBySideCameraFragment.kt`](app/src/main/java/com/adiglobal/cameraeyes/SideBySideCameraFragment.kt) — all camera logic (slotting, permissions, status).
+- [`app/src/main/java/.../MainActivity.kt`](app/src/main/java/com/compuglobal/astralprojector/MainActivity.kt) — hosts the fragment.
+- [`app/src/main/java/.../SideBySideCameraFragment.kt`](app/src/main/java/com/compuglobal/astralprojector/SideBySideCameraFragment.kt) — all camera logic (slotting, permissions, status).
 - [`app/src/main/res/layout/fragment_side_by_side.xml`](app/src/main/res/layout/fragment_side_by_side.xml) — two 50/50 `AspectRatioTextureView`s with status overlays.
 - [`app/src/main/res/xml/device_filter.xml`](app/src/main/res/xml/device_filter.xml) — USB device filter (`3141:25446` = `0c45:6366`).

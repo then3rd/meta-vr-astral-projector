@@ -1,4 +1,4 @@
-package com.adiglobal.cameraeyes
+package com.compuglobal.astralprojector
 
 import android.content.Context
 import android.os.Build
@@ -14,12 +14,12 @@ import java.util.Locale
 /**
  * Debug-only file logger. Writes to every app-specific external dir returned by
  * [Context.getExternalFilesDirs] — that includes the removable SD card (if inserted), which can be
- * read on a PC via a card reader without ADB. Also mirrors to logcat under tag "CameraEyes".
+ * read on a PC via a card reader without ADB. Also mirrors to logcat under tag "AstralProjector".
  *
- * Log file: <volume>/Android/data/com.adiglobal.cameraeyes/files/camera-eyes.log
+ * Log file: <volume>/Android/data/com.compuglobal.astralprojector/files/camera-eyes.log
  */
 object FileLogger {
-    private const val TAG = "CameraEyes"
+    private const val TAG = "AstralProjector"
     private const val FILE_NAME = "camera-eyes.log"
 
     private const val MAX_BUFFER = 500

@@ -85,7 +85,7 @@ USB permission dialog per camera. Left/right slot depends on hub port, not on wh
   denied every USB permission request, so `onCameraConnected` never fired. With both granted, both
   cameras open and stream MJPEG simultaneously on Quest 2.
 - Permissions can be pre-granted over adb, bypassing the in-headset dialogs:
-  `adb shell pm grant com.adiglobal.cameraeyes android.permission.CAMERA` and same for
+  `adb shell pm grant com.compuglobal.astralprojector android.permission.CAMERA` and same for
   `horizonos.permission.USB_CAMERA`.
 - Note: logs showed the negotiated preview at 640x480@MJPEG despite requesting 1280x720 — resolution
   negotiation may need follow-up if 720p matters.
