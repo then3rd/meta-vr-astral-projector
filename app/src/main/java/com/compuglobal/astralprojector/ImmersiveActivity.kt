@@ -50,6 +50,11 @@ class ImmersiveActivity : AppSystemActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Start from a clean, known-good configuration every launch so a persisted setting from a
+        // previous session can't reintroduce a config-specific bug. Must run before we read any
+        // values below and before the panel/fragment (MainActivity) reads them in onSceneReady.
+        SpatialControls.resetToDefaults(this)
+
         headFollowEnabled = SpatialControls.isHeadFollowEnabled(this)
         smoothingEnabled = SpatialControls.isSmoothingEnabled(this)
         panelDistance = SpatialControls.getPanelDistance(this)

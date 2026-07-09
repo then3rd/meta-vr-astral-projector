@@ -35,6 +35,19 @@ object SpatialControls {
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    /**
+     * Wipe all persisted immersive settings back to their defaults. Called once at process
+     * startup (from [ImmersiveActivity.onCreate]) so the app always begins in a known-good
+     * configuration — persisted head-follow / smoothing / scale / curve values from a previous
+     * session can't carry over and reintroduce a config-specific bug. In-session changes still
+     * apply live; they simply don't survive a relaunch.
+     *
+     * Clears the in-memory map synchronously, so getters called immediately after return defaults.
+     */
+    fun resetToDefaults(context: Context) {
+        prefs(context).edit().clear().apply()
+    }
+
     fun isHeadFollowEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_HEAD_FOLLOW, true)
 
