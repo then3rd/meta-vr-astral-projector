@@ -1,6 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // KSP removed: we use only built-in SDK components, no custom @SchematizedComponent annotations.
+    id("com.meta.spatial.plugin")
 }
 
 android {
@@ -56,4 +58,13 @@ dependencies {
     // Pinned to 3.2.7: it's the newest 3.x tag JitPack built cleanly (all of 3.3.x fail their
     // native build there — libnative-3.3.x.aar 404s). 3.2.7 ships libausbc + libnative + libuvc.
     implementation("com.github.jiangdongguo.AndroidUSBCamera:libausbc:3.2.7")
+
+    // Meta Spatial SDK — immersive host for head-following. The existing 2D camera UI is embedded
+    // as an activity panel inside an AppSystemActivity scene (see ImmersiveActivity).
+    val metaSpatialSdkVersion = "0.13.1"
+    implementation("com.meta.spatial:meta-spatial-sdk:$metaSpatialSdkVersion")
+    implementation("com.meta.spatial:meta-spatial-sdk-toolkit:$metaSpatialSdkVersion")
+    implementation("com.meta.spatial:meta-spatial-sdk-vr:$metaSpatialSdkVersion")
+    // Note: the com.meta.spatial.plugin Gradle plugin (applied above) registers its own KSP
+    // processor (ComponentDataProcessor) internally — no explicit ksp() dep needed here.
 }

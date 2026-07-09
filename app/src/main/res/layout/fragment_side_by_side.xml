@@ -126,10 +126,22 @@
             android:id="@+id/swapToggle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
             android:background="@color/status_scrim"
             android:paddingHorizontal="14dp"
             android:paddingVertical="8dp"
             android:text="@string/swap_cameras"
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/headFollowToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/status_scrim"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="@string/head_follow_on"
             android:textColor="@android:color/white"
             android:textSize="14sp" />
     </LinearLayout>

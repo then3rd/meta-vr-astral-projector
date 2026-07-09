@@ -116,6 +116,19 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         root.findViewById<TextView>(R.id.swapToggle).setOnClickListener {
             performSwap()
         }
+
+        // Head-follow toggle. The fragment lives inside MainActivity (the panel), so it can't
+        // reach ImmersiveActivity directly — instead it flips the shared preference, which
+        // ImmersiveActivity observes via a change listener and applies to the panel's Followable.
+        val followBtn = root.findViewById<TextView>(R.id.headFollowToggle)
+        val initialFollow = SpatialControls.isHeadFollowEnabled(requireContext())
+        followBtn.text = getString(if (initialFollow) R.string.head_follow_on else R.string.head_follow_off)
+        followBtn.setOnClickListener {
+            val next = !SpatialControls.isHeadFollowEnabled(requireContext())
+            SpatialControls.setHeadFollowEnabled(requireContext(), next)
+            followBtn.text = getString(if (next) R.string.head_follow_on else R.string.head_follow_off)
+            FileLogger.log("headFollow -> $next")
+        }
         // Pane size settles after first layout (and can change); recompute the transform then.
         // displayIndexFor is its own inverse, so it also maps a display index back to whichever
         // logical slot currently renders into it.
