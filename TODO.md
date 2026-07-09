@@ -1,0 +1,2 @@
+- Create Justfile with target for installing build dependencies.
+- What does it look like if built with BeeWare? Does the camera library still fit?

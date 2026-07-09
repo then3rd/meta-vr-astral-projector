@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Microdia Webcam Vitade AF: USB 0c45:6366 -> decimal 3141:25446.
+         Both physical cameras report the same VID/PID, so this one entry matches both. -->
+    <usb-device vendor-id="3141" product-id="25446" />
+</resources>

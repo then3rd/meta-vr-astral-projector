@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="status_scrim">#B3000000</color>
+    <color name="divider">#FF2C2C2C</color>
+</resources>
