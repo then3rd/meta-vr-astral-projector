@@ -8,14 +8,19 @@ import com.meta.spatial.core.Quaternion
 import com.meta.spatial.core.SpatialFeature
 import com.meta.spatial.core.SpatialSDKExperimentalAPI
 import com.meta.spatial.core.Vector3
+import com.meta.spatial.runtime.PanelConfigOptions
+import com.meta.spatial.runtime.PanelSceneObject
+import com.meta.spatial.runtime.PanelShapeType
 import com.meta.spatial.runtime.ReferenceSpace
 import com.meta.spatial.toolkit.AppSystemActivity
 import com.meta.spatial.toolkit.Panel
 import com.meta.spatial.toolkit.PanelRegistration
+import com.meta.spatial.toolkit.SceneObjectSystem
 import com.meta.spatial.toolkit.Transform
 import com.meta.spatial.vr.LocomotionSystem
 import com.meta.spatial.vr.VRFeature
 import com.meta.spatial.vr.VrInputSystemType
+import kotlin.math.max
 
 /**
  * Immersive host activity. [AppSystemActivity] already registers the toolkit systems via its
@@ -25,14 +30,17 @@ import com.meta.spatial.vr.VrInputSystemType
  * - Passthrough is enabled so the real world shows behind the camera panel (mixed reality).
  * - Locomotion (teleport) is disabled so the controller acts as a panel pointer instead.
  * - A [HeadFollowSystem] keeps the panel in front of the user's head when head-follow is on.
+ * - The panel's size (scale) and curvature (flat quad <-> cylinder) are user-adjustable and are
+ *   applied live by reshaping the panel scene object.
  */
 class ImmersiveActivity : AppSystemActivity() {
 
     private var panelEntity: Entity? = null
 
     // Read live by HeadFollowSystem every frame; updated by the shared-prefs listener so the
-    // in-panel toggle (MainActivity) takes effect immediately without polling SharedPreferences.
+    // in-panel controls (MainActivity) take effect immediately without polling SharedPreferences.
     @Volatile private var headFollowEnabled = true
+    @Volatile private var smoothingEnabled = false
     @Volatile private var panelDistance = SpatialControls.DEFAULT_PANEL_DISTANCE
 
     // SIMPLE_CONTROLLER gives a controller ray pointer for interacting with panels.
@@ -43,6 +51,7 @@ class ImmersiveActivity : AppSystemActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         headFollowEnabled = SpatialControls.isHeadFollowEnabled(this)
+        smoothingEnabled = SpatialControls.isSmoothingEnabled(this)
         panelDistance = SpatialControls.getPanelDistance(this)
 
         systemManager.registerSystem(
@@ -50,6 +59,7 @@ class ImmersiveActivity : AppSystemActivity() {
                 panelEntity = { panelEntity },
                 isEnabled = { headFollowEnabled },
                 distance = { panelDistance },
+                isSmoothing = { smoothingEnabled },
             )
         )
 
@@ -66,8 +76,8 @@ class ImmersiveActivity : AppSystemActivity() {
             // config block is PanelConfigOptions.() -> Unit — `this` = the options object.
             // Use the default (append) ordering so these explicit dimensions win over the SDK's
             // default sizing (which would otherwise shrink the panel via fractionOfScreen).
-            width = PANEL_WIDTH_M
-            height = PANEL_HEIGHT_M
+            width = BASE_WIDTH_M
+            height = BASE_HEIGHT_M
             layoutWidthInPx = PANEL_PX_WIDTH
             layoutHeightInPx = PANEL_PX_HEIGHT
         }
@@ -91,15 +101,76 @@ class ImmersiveActivity : AppSystemActivity() {
             Panel(PANEL_ID),
         )
 
+        // Apply the user's saved scale/curve to the freshly-created panel.
+        applyPanelShape()
+
         FileLogger.log(
-            "ImmersiveActivity: panel ready distance=${panelDistance}m follow=$headFollowEnabled passthrough=on"
+            "ImmersiveActivity: panel ready distance=${panelDistance}m follow=$headFollowEnabled " +
+                "smoothing=$smoothingEnabled passthrough=on"
         )
     }
 
+    /**
+     * Rebuild the panel's mesh to reflect the current scale + curve preferences. Scale multiplies
+     * the base metre dimensions; curve interpolates between a flat quad (0) and a cylinder whose
+     * angular extent grows with the curve amount (smaller cylinder radius = more wrap-around).
+     */
+    private fun applyPanelShape() {
+        val entity = panelEntity ?: return
+        val scale = SpatialControls.getPanelScale(this)
+        val curve = SpatialControls.getPanelCurve(this)
+
+        val width = BASE_WIDTH_M * scale
+        val height = BASE_HEIGHT_M * scale
+
+        val config = if (curve <= CURVE_EPSILON) {
+            PanelConfigOptions(
+                width = width,
+                height = height,
+                layoutWidthInPx = PANEL_PX_WIDTH,
+                layoutHeightInPx = PANEL_PX_HEIGHT,
+                panelShapeType = PanelShapeType.QUAD,
+            )
+        } else {
+            // Angular extent (radians) the panel wraps around the cylinder = width / radius, so
+            // radius = width / angle. Larger curve -> larger angle -> smaller radius -> more curved.
+            val angle = curve * MAX_CURVE_ANGLE_RAD
+            val radius = max(width / angle, MIN_CURVE_RADIUS_M)
+            PanelConfigOptions(
+                width = width,
+                height = height,
+                layoutWidthInPx = PANEL_PX_WIDTH,
+                layoutHeightInPx = PANEL_PX_HEIGHT,
+                panelShapeType = PanelShapeType.CYLINDER,
+                radiusForCylinderOrSphere = radius,
+            )
+        }
+
+        systemManager.findSystem<SceneObjectSystem>()
+            .getSceneObject(entity)
+            ?.thenAccept { sceneObject ->
+                if (sceneObject is PanelSceneObject) {
+                    sceneObject.reshape(config)
+                    FileLogger.log(
+                        "ImmersiveActivity: reshape scale=$scale curve=$curve " +
+                            "size=${width}x${height}m shape=${config.panelShapeType}"
+                    )
+                }
+            }
+    }
+
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == SpatialControls.KEY_HEAD_FOLLOW) {
-            headFollowEnabled = SpatialControls.isHeadFollowEnabled(this)
-            FileLogger.log("ImmersiveActivity: head-follow -> $headFollowEnabled")
+        when (key) {
+            SpatialControls.KEY_HEAD_FOLLOW -> {
+                headFollowEnabled = SpatialControls.isHeadFollowEnabled(this)
+                FileLogger.log("ImmersiveActivity: head-follow -> $headFollowEnabled")
+            }
+            SpatialControls.KEY_SMOOTHING -> {
+                smoothingEnabled = SpatialControls.isSmoothingEnabled(this)
+                FileLogger.log("ImmersiveActivity: smoothing -> $smoothingEnabled")
+            }
+            SpatialControls.KEY_PANEL_SCALE, SpatialControls.KEY_PANEL_CURVE ->
+                runOnMainThread { applyPanelShape() }
         }
     }
 
@@ -111,9 +182,16 @@ class ImmersiveActivity : AppSystemActivity() {
 
     companion object {
         private const val PANEL_ID = 1
-        private const val PANEL_WIDTH_M = 2.4f
-        private const val PANEL_HEIGHT_M = 1.2f
+        private const val BASE_WIDTH_M = 2.4f
+        private const val BASE_HEIGHT_M = 1.2f
         private const val PANEL_PX_WIDTH = 1920
         private const val PANEL_PX_HEIGHT = 960
+
+        // Curve <= this is treated as flat (quad) to avoid a near-infinite cylinder radius.
+        private const val CURVE_EPSILON = 0.02f
+        // Max wrap-around at full curve (~150 degrees).
+        private const val MAX_CURVE_ANGLE_RAD = 2.618f
+        // Clamp so the cylinder can't collapse to an unusably tight tube.
+        private const val MIN_CURVE_RADIUS_M = 0.3f
     }
 }

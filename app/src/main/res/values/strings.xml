@@ -17,5 +17,9 @@
     <string name="swap_cameras">Swap</string>
     <string name="head_follow_on">Follow: On</string>
     <string name="head_follow_off">Follow: Off</string>
+    <string name="smoothing_on">Smooth: On</string>
+    <string name="smoothing_off">Smooth: Off</string>
+    <string name="curve_label">Curve: %1$d%%</string>
+    <string name="scale_label">Scale: %1$d%%</string>
     <string name="camera_permission_denied">Camera permission is required to access USB cameras. Grant it in Settings and relaunch.</string>
 </resources>

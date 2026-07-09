@@ -138,12 +138,64 @@
             android:id="@+id/headFollowToggle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
             android:background="@color/status_scrim"
             android:paddingHorizontal="14dp"
             android:paddingVertical="8dp"
             android:text="@string/head_follow_on"
             android:textColor="@android:color/white"
             android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/smoothingToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/status_scrim"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="@string/smoothing_off"
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- Panel curve + scale sliders (affect the immersive panel via SharedPreferences). -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="56dp"
+        android:background="@color/status_scrim"
+        android:orientation="vertical"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/curveLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/curve_label"
+            android:textColor="@android:color/white"
+            android:textSize="13sp" />
+
+        <SeekBar
+            android:id="@+id/curveSlider"
+            android:layout_width="360dp"
+            android:layout_height="wrap_content"
+            android:max="100" />
+
+        <TextView
+            android:id="@+id/scaleLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/scale_label"
+            android:textColor="@android:color/white"
+            android:textSize="13sp" />
+
+        <SeekBar
+            android:id="@+id/scaleSlider"
+            android:layout_width="360dp"
+            android:layout_height="wrap_content"
+            android:max="100" />
     </LinearLayout>
 
     <!-- Manual fallback: re-fire USB permission requests for any camera that never got one. -->

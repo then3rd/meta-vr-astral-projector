@@ -9,6 +9,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.MultiCameraFragment
@@ -142,6 +143,49 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             followBtn.text = str(if (next) R.string.head_follow_on else R.string.head_follow_off)
             FileLogger.log("headFollow -> $next")
         }
+
+        // Smoothing toggle. Like head-follow, it just persists a preference that ImmersiveActivity
+        // observes and applies to the HeadFollowSystem's interpolation.
+        val smoothBtn = root.findViewById<TextView>(R.id.smoothingToggle)
+        val initialSmooth = SpatialControls.isSmoothingEnabled(requireContext())
+        smoothBtn.text = str(if (initialSmooth) R.string.smoothing_on else R.string.smoothing_off)
+        smoothBtn.setOnClickListener {
+            val next = !SpatialControls.isSmoothingEnabled(requireContext())
+            SpatialControls.setSmoothingEnabled(requireContext(), next)
+            smoothBtn.text = str(if (next) R.string.smoothing_on else R.string.smoothing_off)
+            FileLogger.log("smoothing -> $next")
+        }
+
+        // Curve slider: 0..100% maps directly to curve amount 0.0..1.0 (flat -> cylinder).
+        val curveLabel = root.findViewById<TextView>(R.id.curveLabel)
+        val curveSlider = root.findViewById<SeekBar>(R.id.curveSlider)
+        val initialCurvePct = (SpatialControls.getPanelCurve(requireContext()) * 100f).toInt()
+        curveSlider.progress = initialCurvePct
+        curveLabel.text = str(R.string.curve_label, initialCurvePct)
+        curveSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                curveLabel.text = str(R.string.curve_label, progress)
+                if (fromUser) SpatialControls.setPanelCurve(requireContext(), progress / 100f)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
+
+        // Scale slider: 0..100% maps to panel scale MIN_PANEL_SCALE..MAX_PANEL_SCALE.
+        val scaleLabel = root.findViewById<TextView>(R.id.scaleLabel)
+        val scaleSlider = root.findViewById<SeekBar>(R.id.scaleSlider)
+        val initialScale = SpatialControls.getPanelScale(requireContext())
+        scaleSlider.progress = scaleToProgress(initialScale)
+        scaleLabel.text = str(R.string.scale_label, (initialScale * 100f).toInt())
+        scaleSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                val scale = progressToScale(progress)
+                scaleLabel.text = str(R.string.scale_label, (scale * 100f).toInt())
+                if (fromUser) SpatialControls.setPanelScale(requireContext(), scale)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
         // Pane size settles after first layout (and can change); recompute the transform then.
         // displayIndexFor is its own inverse, so it also maps a display index back to whichever
         // logical slot currently renders into it.
@@ -360,6 +404,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             sy = -sy
             tv.setTransform(Matrix().apply { setScale(sx, sy, viewW / 2f, viewH / 2f) })
         }
+    }
+
+    /** Panel scale (fraction) -> SeekBar progress 0..100 across the allowed scale range. */
+    private fun scaleToProgress(scale: Float): Int {
+        val range = SpatialControls.MAX_PANEL_SCALE - SpatialControls.MIN_PANEL_SCALE
+        return (((scale - SpatialControls.MIN_PANEL_SCALE) / range) * 100f).toInt().coerceIn(0, 100)
+    }
+
+    /** SeekBar progress 0..100 -> panel scale (fraction) across the allowed scale range. */
+    private fun progressToScale(progress: Int): Float {
+        val range = SpatialControls.MAX_PANEL_SCALE - SpatialControls.MIN_PANEL_SCALE
+        return SpatialControls.MIN_PANEL_SCALE + (progress / 100f) * range
     }
 
     private fun loadAspectMode(): AspectMode {
