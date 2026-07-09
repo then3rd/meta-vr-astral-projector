@@ -9,4 +9,6 @@
     <string name="status_error">Camera error: %1$s\nTry lower resolution if two cameras won\'t co-exist.</string>
     <string name="log_hide">Hide log</string>
     <string name="log_show">Show log</string>
+    <string name="retry_permission">Retry permission</string>
+    <string name="camera_permission_denied">Camera permission is required to access USB cameras. Grant it in Settings and relaunch.</string>
 </resources>

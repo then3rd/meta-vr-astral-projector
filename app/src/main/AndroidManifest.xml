@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- App drives USB cameras in host mode; no camera HAL / CAMERA permission needed. -->
+    <!-- App drives USB cameras in host mode via UsbManager, but since Android 10 the framework
+         refuses to grant USB access to any device with video capture (UVC) unless the app also
+         holds the runtime CAMERA permission (UsbUserPermissionManager: "USB Camera permission
+         required for USB video class devices"). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Meta Horizon OS additionally gates USB UVC devices behind its own runtime permission
+         (permission group EXTERNAL_CAMERA). Without it, hasPermission()/requestPermission() on
+         the UsbDevice are silently denied on Quest. Ignored on regular Android. -->
+    <uses-permission android:name="horizonos.permission.USB_CAMERA" />
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="true" />
+    <!-- CAMERA permission implies the camera feature; mark it optional so devices without a
+         built-in camera HAL (e.g. Quest 2) can still install the app. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
 
     <application
         android:allowBackup="true"

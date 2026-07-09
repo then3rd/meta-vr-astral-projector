@@ -101,4 +101,18 @@
         android:textColor="@android:color/white"
         android:textSize="14sp" />
 
+    <!-- Manual fallback: re-fire USB permission requests for any camera that never got one. -->
+    <TextView
+        android:id="@+id/permissionRetry"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="8dp"
+        android:background="@color/status_scrim"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:text="@string/retry_permission"
+        android:textColor="@android:color/white"
+        android:textSize="14sp" />
+
 </FrameLayout>

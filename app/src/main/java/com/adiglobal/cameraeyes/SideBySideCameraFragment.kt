@@ -59,6 +59,13 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             logScroll?.visibility = if (show) View.VISIBLE else View.GONE
             logToggle.text = getString(if (show) R.string.log_hide else R.string.log_show)
         }
+
+        // Fallback for when the automatic USB permission dialog never becomes visible/interactable
+        // (observed stuck on Meta Quest 2) — lets the user re-fire requestPermission on demand.
+        root.findViewById<TextView>(R.id.permissionRetry).setOnClickListener {
+            FileLogger.log("manual permission retry tapped")
+            retryAllPendingPermissions()
+        }
         // Stream every log line (including ones buffered before now) to the overlay.
         FileLogger.setListener { line -> appendLog(line) }
         return root
@@ -159,6 +166,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                     .onFailure { FileLogger.log("requestPermission FAILED", it) }
                 return
             }
+        }
+    }
+
+    /** Manual fallback: re-fire requestPermission for every camera still lacking it, not just the first. */
+    private fun retryAllPendingPermissions() {
+        val pending = getCameraMap().values.filter { !safeHasPermission(it.getUsbDevice()) }
+        FileLogger.log("retryAllPendingPermissions: ${pending.size} camera(s) pending")
+        pending.forEach { cam ->
+            val device = cam.getUsbDevice()
+            FileLogger.log("requestPermission (manual retry) for ${desc(device)}")
+            runCatching { requestPermission(device) }
+                .onFailure { FileLogger.log("requestPermission (manual retry) FAILED", it) }
         }
     }
 
