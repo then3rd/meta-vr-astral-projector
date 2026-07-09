@@ -8,6 +8,8 @@ import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.jiangdg.ausbc.MultiCameraClient
@@ -55,6 +57,13 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var aspectMode = AspectMode.STRETCH
     private var aspectToggle: TextView? = null
 
+    // Whether the left/right panes are swapped; left/right slot depends on hub port,
+    // not on which physical camera unit connected, so this lets the user correct it on-screen.
+    private var swapped = false
+    private lateinit var paneContainer: LinearLayout
+    private lateinit var paneLeft: FrameLayout
+    private lateinit var paneRight: FrameLayout
+
     private lateinit var textures: Array<AspectRatioTextureView>
     private lateinit var statuses: Array<TextView>
 
@@ -91,6 +100,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             saveAspectMode(aspectMode)
             aspectBtn.text = getString(aspectMode.labelRes)
             applyAspectToAll()
+        }
+
+        paneContainer = root.findViewById(R.id.paneContainer)
+        paneLeft = root.findViewById(R.id.paneLeft)
+        paneRight = root.findViewById(R.id.paneRight)
+        swapped = loadSwapped()
+        applyPaneOrder()
+        root.findViewById<TextView>(R.id.swapToggle).setOnClickListener {
+            swapped = !swapped
+            FileLogger.log("swap panes -> $swapped")
+            saveSwapped(swapped)
+            applyPaneOrder()
         }
         // Pane size settles after first layout (and can change); recompute the transform then.
         textures.forEachIndexed { idx, tv ->
@@ -303,6 +324,30 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             .edit().putString(PREF_ASPECT_MODE, mode.name).apply()
     }
 
+    // Reorders the pane container's children so paneLeft/paneRight visually swap sides,
+    // without touching camera<->TextureView bindings (both panes stay attached to the window).
+    private fun applyPaneOrder() {
+        if (!::paneContainer.isInitialized) return
+        paneContainer.removeView(paneLeft)
+        paneContainer.removeView(paneRight)
+        if (swapped) {
+            paneContainer.addView(paneRight, 0)
+            paneContainer.addView(paneLeft)
+        } else {
+            paneContainer.addView(paneLeft, 0)
+            paneContainer.addView(paneRight)
+        }
+    }
+
+    private fun loadSwapped(): Boolean =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_SWAPPED, false)
+
+    private fun saveSwapped(value: Boolean) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_SWAPPED, value).apply()
+    }
+
     private fun buildRequest(): CameraRequest =
         CameraRequest.Builder()
             .setPreviewWidth(PREVIEW_WIDTH)
@@ -338,5 +383,6 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val MAX_LOG_LINES = 400
         private const val PREFS_NAME = "camera_eyes"
         private const val PREF_ASPECT_MODE = "aspect_mode"
+        private const val PREF_SWAPPED = "panes_swapped"
     }
 }

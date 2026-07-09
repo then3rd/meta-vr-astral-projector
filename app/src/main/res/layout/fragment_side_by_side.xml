@@ -6,12 +6,14 @@
 
     <!-- Camera panes -->
     <LinearLayout
+        android:id="@+id/paneContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal">
 
         <!-- LEFT camera slot -->
         <FrameLayout
+            android:id="@+id/paneLeft"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1">
@@ -42,6 +44,7 @@
 
         <!-- RIGHT camera slot -->
         <FrameLayout
+            android:id="@+id/paneRight"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1">
@@ -102,19 +105,37 @@
         android:textColor="@android:color/white"
         android:textSize="14sp" />
 
-    <!-- Cycles how the video is scaled into each pane: stretch / H-fit / V-fit / full frame. -->
-    <TextView
-        android:id="@+id/aspectToggle"
+    <!-- Cycles how the video is scaled into each pane, and swaps left/right panes. -->
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|center_horizontal"
         android:layout_margin="8dp"
-        android:background="@color/status_scrim"
-        android:paddingHorizontal="14dp"
-        android:paddingVertical="8dp"
-        android:text="@string/aspect_stretch"
-        android:textColor="@android:color/white"
-        android:textSize="14sp" />
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/aspectToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:background="@color/status_scrim"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="@string/aspect_stretch"
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/swapToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/status_scrim"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="@string/swap_cameras"
+            android:textColor="@android:color/white"
+            android:textSize="14sp" />
+    </LinearLayout>
 
     <!-- Manual fallback: re-fire USB permission requests for any camera that never got one. -->
     <TextView
