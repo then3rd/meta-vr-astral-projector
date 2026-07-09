@@ -62,8 +62,10 @@ class ImmersiveActivity : AppSystemActivity() {
         // Only ONE panel source may be set; activityClass hosts MainActivity as a 2D panel.
         PanelRegistration(PANEL_ID) { _: Entity ->
             activityClass = MainActivity::class.java
-        }.config(false) {
+        }.config {
             // config block is PanelConfigOptions.() -> Unit — `this` = the options object.
+            // Use the default (append) ordering so these explicit dimensions win over the SDK's
+            // default sizing (which would otherwise shrink the panel via fractionOfScreen).
             width = PANEL_WIDTH_M
             height = PANEL_HEIGHT_M
             layoutWidthInPx = PANEL_PX_WIDTH

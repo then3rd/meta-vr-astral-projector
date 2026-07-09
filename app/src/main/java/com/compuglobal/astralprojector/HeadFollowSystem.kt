@@ -36,8 +36,9 @@ class HeadFollowSystem(
         // doesn't snap to the origin.
         if (headPose == Pose()) return
 
-        // A point `distance` metres straight ahead of where the head is looking.
-        val forward = headPose.q * Vector3(0f, 0f, -distance())
+        // A point `distance` metres in front of the head. In the Spatial SDK the head entity's
+        // local +Z axis points forward (matching the samples' LookAtHead zOffset default of +1).
+        val forward = headPose.q * Vector3(0f, 0f, distance())
         val pose = Pose()
         pose.t = headPose.t + forward
         // Face the panel toward the user, but keep it upright (no pitch/roll from looking up/down).
