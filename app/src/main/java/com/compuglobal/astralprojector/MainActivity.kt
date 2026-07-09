@@ -39,6 +39,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        FileLogger.log("MainActivity.onNewIntent action=${intent.action}")
+        attachCameraFragment()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FileLogger.init(this)

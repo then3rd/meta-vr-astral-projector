@@ -49,6 +49,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     /** Slot 0 = left, slot 1 = right. Null means the slot is free. */
     private val slots = arrayOfNulls<MultiCameraClient.Camera>(SLOT_COUNT)
 
+    /** Consecutive open-retry attempts per slot; reset to 0 on successful OPENED. */
+    private val reopenAttempts = IntArray(SLOT_COUNT)
+
     /** Negotiated preview size per slot (may differ from the requested one, e.g. 640x480). */
     private val videoSizes = arrayOfNulls<PreviewSize>(SLOT_COUNT)
 
@@ -207,6 +210,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         if (idx < 0) return
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
+                reopenAttempts[idx] = 0
                 hideStatus(displayIndexFor(idx))
                 // getPreviewSize() holds the size UVC actually negotiated, which can differ
                 // from the requested 1280x720 (640x480 observed on Quest 2).
@@ -215,8 +219,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 applyAspect(idx)
             }
             ICameraStateCallBack.State.CLOSED -> setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
-            ICameraStateCallBack.State.ERROR ->
+            ICameraStateCallBack.State.ERROR -> {
                 setStatus(displayIndexFor(idx), getString(R.string.status_error, msg ?: "unknown"))
+                // On hub reset both cameras detach+reattach; the second openCamera often races
+                // with the first camera's libuvc teardown and gets errno -99. Retry with backoff.
+                if (msg?.contains("open") == true && reopenAttempts[idx] < MAX_REOPEN_ATTEMPTS) {
+                    scheduleReopen(self, idx)
+                }
+            }
         }
     }
 
@@ -333,6 +343,23 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         }
     }
 
+    /**
+     * Schedules a retry of openCamera for a slot that reported an open failure.
+     * Delay grows with each attempt so the first camera's libuvc context has time to settle.
+     */
+    private fun scheduleReopen(camera: MultiCameraClient.Camera, logicalIdx: Int) {
+        val attempt = ++reopenAttempts[logicalIdx]
+        val delay = OPEN_RETRY_BASE_MS * attempt
+        FileLogger.log("scheduleReopen slot=$logicalIdx attempt=$attempt delay=${delay}ms")
+        mainHandler.postDelayed({
+            if (slots[logicalIdx] != camera) return@postDelayed  // slot reassigned; skip
+            val displayIdx = displayIndexFor(logicalIdx)
+            setStatus(displayIdx, getString(R.string.status_connecting))
+            runCatching { camera.openCamera(textures[displayIdx], buildRequest()) }
+                .onFailure { FileLogger.log("reopen slot=$logicalIdx attempt=$attempt FAILED", it) }
+        }, delay)
+    }
+
     /** Redirects an already-open camera's render target to its (possibly new) display texture. */
     private fun reopenOnDisplay(camera: MultiCameraClient.Camera, logicalIdx: Int) {
         val displayIdx = displayIndexFor(logicalIdx)
@@ -399,5 +426,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREF_ASPECT_MODE = "aspect_mode"
         private const val PREF_SWAPPED = "panes_swapped"
         private const val SWAP_REOPEN_DELAY_MS = 300L
+        private const val OPEN_RETRY_BASE_MS = 600L   // retry delay per attempt (multiplied by attempt#)
+        private const val MAX_REOPEN_ATTEMPTS = 3
     }
 }

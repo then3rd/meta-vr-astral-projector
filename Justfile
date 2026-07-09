@@ -16,10 +16,13 @@ install-deps:
     mkdir -p "$HOME/Android"
 
     if [ ! -d "$JAVA_HOME" ]; then
-        echo "JDK 17 not found at $JAVA_HOME"
-        echo "Download Eclipse Temurin JDK 17 from https://adoptium.net/"
-        echo "and extract it to $HOME/Android/"
-        exit 1
+        echo "Downloading Eclipse Temurin JDK 17..."
+        JDK_URL="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_x64_linux_hotspot_17.0.19_10.tar.gz"
+        JDK_ARCHIVE="$HOME/Android/jdk-17.tar.gz"
+        curl -fL -o "$JDK_ARCHIVE" "$JDK_URL"
+        tar -xzf "$JDK_ARCHIVE" -C "$HOME/Android/"
+        rm "$JDK_ARCHIVE"
+        echo "JDK 17 installed at $JAVA_HOME"
     else
         echo "JDK 17 already installed at $JAVA_HOME"
     fi
@@ -79,6 +82,9 @@ install-debug:
 # Launch the app on a connected device
 run-debug:
     "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.compuglobal.astralprojector -c android.intent.category.LAUNCHER 1
+
+# Build install and run
+refresh: build-debug install-debug run-debug
 
 # List connected Android devices
 devices:
