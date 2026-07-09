@@ -73,11 +73,11 @@ build-release:
     @echo "Release APK: app/build/outputs/apk/release/app-release.apk"
 
 # Build and install the debug APK on a connected device
-install-debug: build-debug
+install-debug:
     "$ANDROID_HOME/platform-tools/adb" install -r app/build/outputs/apk/debug/app-debug.apk
 
 # Launch the app on a connected device
-run-debug: install-debug
+run-debug:
     "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.adiglobal.cameraeyes -c android.intent.category.LAUNCHER 1
 
 # List connected Android devices

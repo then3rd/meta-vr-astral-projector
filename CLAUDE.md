@@ -40,6 +40,15 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
   log overlay with show/hide toggle, hidden by default), per-slot status overlays, and a "retry
   permission" button.
+- Swap toggle: corrects which physical camera renders left vs right (hub-port-dependent, see Field
+  setup) without recabling. Persisted in SharedPreferences. Implemented as an indirection
+  (`displayIndexFor`) from logical connection slot -> display pane, **not** by reparenting the
+  pane `View`s — reparenting a `TextureView` (even just moving its container within a still-attached
+  parent) detaches it from the window, which destroys its `SurfaceTexture`; AUSBC never rebinds to
+  the new one, so the pane goes blank until the app is restarted. Toggling instead calls
+  `camera.closeCamera()` then re-`openCamera()`s onto the other (already-attached) `TextureView`
+  after a short delay, mirroring the same close/open lifecycle already used for physical
+  detach/reconnect.
 
 ## Critical dependency pins (do not "upgrade" blindly)
 

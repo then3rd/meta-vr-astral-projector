@@ -6,14 +6,12 @@
 
     <!-- Camera panes -->
     <LinearLayout
-        android:id="@+id/paneContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal">
 
         <!-- LEFT camera slot -->
         <FrameLayout
-            android:id="@+id/paneLeft"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1">
@@ -44,7 +42,6 @@
 
         <!-- RIGHT camera slot -->
         <FrameLayout
-            android:id="@+id/paneRight"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1">

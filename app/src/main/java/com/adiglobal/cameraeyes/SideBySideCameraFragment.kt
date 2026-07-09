@@ -8,8 +8,6 @@ import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.jiangdg.ausbc.MultiCameraClient
@@ -57,12 +55,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var aspectMode = AspectMode.STRETCH
     private var aspectToggle: TextView? = null
 
-    // Whether the left/right panes are swapped; left/right slot depends on hub port,
-    // not on which physical camera unit connected, so this lets the user correct it on-screen.
+    // Which display pane (texture/status view) each logical connection slot renders into.
+    // Left/right depends on hub port, not on which physical camera unit connected, so this
+    // lets the user correct it on-screen. Swapping redirects the already-open camera's render
+    // target to the other (already-attached) TextureView rather than moving views in the layout
+    // — reparenting a TextureView detaches/destroys its SurfaceTexture and the camera never
+    // rebinds to the new one, leaving the pane blank until the app restarts.
     private var swapped = false
-    private lateinit var paneContainer: LinearLayout
-    private lateinit var paneLeft: FrameLayout
-    private lateinit var paneRight: FrameLayout
+    private fun displayIndexFor(logicalIdx: Int): Int = if (swapped) SLOT_COUNT - 1 - logicalIdx else logicalIdx
 
     private lateinit var textures: Array<AspectRatioTextureView>
     private lateinit var statuses: Array<TextView>
@@ -102,21 +102,16 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             applyAspectToAll()
         }
 
-        paneContainer = root.findViewById(R.id.paneContainer)
-        paneLeft = root.findViewById(R.id.paneLeft)
-        paneRight = root.findViewById(R.id.paneRight)
         swapped = loadSwapped()
-        applyPaneOrder()
         root.findViewById<TextView>(R.id.swapToggle).setOnClickListener {
-            swapped = !swapped
-            FileLogger.log("swap panes -> $swapped")
-            saveSwapped(swapped)
-            applyPaneOrder()
+            performSwap()
         }
         // Pane size settles after first layout (and can change); recompute the transform then.
+        // displayIndexFor is its own inverse, so it also maps a display index back to whichever
+        // logical slot currently renders into it.
         textures.forEachIndexed { idx, tv ->
             tv.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
-                if (r - l != or - ol || b - t != ob - ot) applyAspect(idx)
+                if (r - l != or - ol || b - t != ob - ot) applyAspect(displayIndexFor(idx))
             }
         }
 
@@ -153,7 +148,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val d = camera.getUsbDevice()
         FileLogger.log("onCameraAttached ${desc(d)} hasPermission=${safeHasPermission(d)} mapSize=${getCameraMap().size}")
         val idx = firstFreeSlot()
-        if (idx >= 0) setStatus(idx, getString(R.string.status_connecting))
+        if (idx >= 0) setStatus(displayIndexFor(idx), getString(R.string.status_connecting))
     }
 
     override fun onCameraDetached(camera: MultiCameraClient.Camera) {
@@ -162,7 +157,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         if (idx >= 0) {
             slots[idx] = null
             videoSizes[idx] = null
-            setStatus(idx, getString(R.string.status_waiting))
+            setStatus(displayIndexFor(idx), getString(R.string.status_waiting))
         }
         runCatching { camera.closeCamera() }.onFailure { FileLogger.log("closeCamera(detach) failed", it) }
     }
@@ -179,13 +174,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         }
         slots[idx] = camera
         camera.setCameraStateCallBack(this)
+        val displayIdx = displayIndexFor(idx)
         try {
-            FileLogger.log("openCamera slot=$idx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
-            camera.openCamera(textures[idx], buildRequest())
-            setStatus(idx, getString(R.string.status_opening))
+            FileLogger.log("openCamera slot=$idx display=$displayIdx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
+            camera.openCamera(textures[displayIdx], buildRequest())
+            setStatus(displayIdx, getString(R.string.status_opening))
         } catch (t: Throwable) {
             FileLogger.log("openCamera slot=$idx FAILED", t)
-            setStatus(idx, getString(R.string.status_error, t.message ?: "openCamera threw"))
+            setStatus(displayIdx, getString(R.string.status_error, t.message ?: "openCamera threw"))
         }
         requestPermissionForPendingCameras()
     }
@@ -196,7 +192,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         if (idx >= 0) {
             slots[idx] = null
             videoSizes[idx] = null
-            setStatus(idx, getString(R.string.status_disconnected))
+            setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
         }
         runCatching { camera.closeCamera() }
     }
@@ -211,16 +207,16 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         if (idx < 0) return
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
-                hideStatus(idx)
+                hideStatus(displayIndexFor(idx))
                 // getPreviewSize() holds the size UVC actually negotiated, which can differ
                 // from the requested 1280x720 (640x480 observed on Quest 2).
                 videoSizes[idx] = runCatching { self.getPreviewSize() }.getOrNull()
                 FileLogger.log("slot=$idx negotiated previewSize=${videoSizes[idx]?.width}x${videoSizes[idx]?.height}")
                 applyAspect(idx)
             }
-            ICameraStateCallBack.State.CLOSED -> setStatus(idx, getString(R.string.status_disconnected))
+            ICameraStateCallBack.State.CLOSED -> setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
             ICameraStateCallBack.State.ERROR ->
-                setStatus(idx, getString(R.string.status_error, msg ?: "unknown"))
+                setStatus(displayIndexFor(idx), getString(R.string.status_error, msg ?: "unknown"))
         }
     }
 
@@ -286,14 +282,17 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
      * AUSBC renders the frame stretched to fill the whole TextureView surface, so aspect
      * correction is a display-time transform: scale the composited texture around the pane
      * center, relative to that stretch-fill baseline.
+     *
+     * [logicalIdx] is the connection slot (matches [videoSizes]); it's mapped to the texture
+     * currently displaying it via [displayIndexFor], since a swap can redirect that mapping.
      */
-    private fun applyAspect(idx: Int) {
+    private fun applyAspect(logicalIdx: Int) {
         if (!::textures.isInitialized) return
-        val tv = textures[idx]
+        val tv = textures[displayIndexFor(logicalIdx)]
         tv.post {
             val viewW = tv.width.toFloat()
             val viewH = tv.height.toFloat()
-            val size = videoSizes[idx]
+            val size = videoSizes[logicalIdx]
             if (viewW <= 0f || viewH <= 0f || size == null || size.width <= 0 || size.height <= 0) {
                 tv.setTransform(null)
                 return@post
@@ -324,19 +323,34 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             .edit().putString(PREF_ASPECT_MODE, mode.name).apply()
     }
 
-    // Reorders the pane container's children so paneLeft/paneRight visually swap sides,
-    // without touching camera<->TextureView bindings (both panes stay attached to the window).
-    private fun applyPaneOrder() {
-        if (!::paneContainer.isInitialized) return
-        paneContainer.removeView(paneLeft)
-        paneContainer.removeView(paneRight)
-        if (swapped) {
-            paneContainer.addView(paneRight, 0)
-            paneContainer.addView(paneLeft)
-        } else {
-            paneContainer.addView(paneLeft, 0)
-            paneContainer.addView(paneRight)
+    private fun performSwap() {
+        swapped = !swapped
+        FileLogger.log("swap -> $swapped")
+        saveSwapped(swapped)
+        for (logicalIdx in 0 until SLOT_COUNT) {
+            val camera = slots[logicalIdx] ?: continue
+            reopenOnDisplay(camera, logicalIdx)
         }
+    }
+
+    /** Redirects an already-open camera's render target to its (possibly new) display texture. */
+    private fun reopenOnDisplay(camera: MultiCameraClient.Camera, logicalIdx: Int) {
+        val displayIdx = displayIndexFor(logicalIdx)
+        setStatus(displayIdx, getString(R.string.status_connecting))
+        runCatching { camera.closeCamera() }.onFailure { FileLogger.log("swap closeCamera failed", it) }
+        // Give closeCamera's async teardown (its own HandlerThread) a moment to finish before
+        // reopening the same USB control block on a fresh one.
+        mainHandler.postDelayed({
+            try {
+                FileLogger.log("swap reopen slot=$logicalIdx -> display=$displayIdx")
+                camera.setCameraStateCallBack(this)
+                camera.openCamera(textures[displayIdx], buildRequest())
+                setStatus(displayIdx, getString(R.string.status_opening))
+            } catch (t: Throwable) {
+                FileLogger.log("swap reopen slot=$logicalIdx FAILED", t)
+                setStatus(displayIdx, getString(R.string.status_error, t.message ?: "swap reopen threw"))
+            }
+        }, SWAP_REOPEN_DELAY_MS)
     }
 
     private fun loadSwapped(): Boolean =
@@ -384,5 +398,6 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREFS_NAME = "camera_eyes"
         private const val PREF_ASPECT_MODE = "aspect_mode"
         private const val PREF_SWAPPED = "panes_swapped"
+        private const val SWAP_REOPEN_DELAY_MS = 300L
     }
 }
