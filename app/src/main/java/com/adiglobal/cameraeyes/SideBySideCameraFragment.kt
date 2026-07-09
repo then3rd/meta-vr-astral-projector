@@ -1,5 +1,7 @@
 package com.adiglobal.cameraeyes
 
+import android.content.Context
+import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +14,7 @@ import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.MultiCameraFragment
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
 import com.jiangdg.ausbc.camera.bean.CameraRequest
+import com.jiangdg.ausbc.camera.bean.PreviewSize
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
 
 /**
@@ -31,8 +34,26 @@ import com.jiangdg.ausbc.widget.AspectRatioTextureView
  */
 class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
+    /**
+     * How the (stretched-to-fill by AUSBC) frame is rescaled inside its pane via
+     * [android.view.TextureView.setTransform]. Scale factors are relative to the
+     * stretch-fill baseline, so STRETCH is the identity.
+     */
+    private enum class AspectMode(val labelRes: Int) {
+        STRETCH(R.string.aspect_stretch),
+        FIT_WIDTH(R.string.aspect_fit_width),
+        FIT_HEIGHT(R.string.aspect_fit_height),
+        FULL_FRAME(R.string.aspect_full_frame),
+    }
+
     /** Slot 0 = left, slot 1 = right. Null means the slot is free. */
     private val slots = arrayOfNulls<MultiCameraClient.Camera>(SLOT_COUNT)
+
+    /** Negotiated preview size per slot (may differ from the requested one, e.g. 640x480). */
+    private val videoSizes = arrayOfNulls<PreviewSize>(SLOT_COUNT)
+
+    private var aspectMode = AspectMode.STRETCH
+    private var aspectToggle: TextView? = null
 
     private lateinit var textures: Array<AspectRatioTextureView>
     private lateinit var statuses: Array<TextView>
@@ -58,6 +79,24 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             val show = logScroll?.visibility != View.VISIBLE
             logScroll?.visibility = if (show) View.VISIBLE else View.GONE
             logToggle.text = getString(if (show) R.string.log_hide else R.string.log_show)
+        }
+
+        aspectMode = loadAspectMode()
+        val aspectBtn = root.findViewById<TextView>(R.id.aspectToggle)
+        aspectToggle = aspectBtn
+        aspectBtn.text = getString(aspectMode.labelRes)
+        aspectBtn.setOnClickListener {
+            aspectMode = AspectMode.values()[(aspectMode.ordinal + 1) % AspectMode.values().size]
+            FileLogger.log("aspect mode -> $aspectMode")
+            saveAspectMode(aspectMode)
+            aspectBtn.text = getString(aspectMode.labelRes)
+            applyAspectToAll()
+        }
+        // Pane size settles after first layout (and can change); recompute the transform then.
+        textures.forEachIndexed { idx, tv ->
+            tv.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+                if (r - l != or - ol || b - t != ob - ot) applyAspect(idx)
+            }
         }
 
         // Fallback for when the automatic USB permission dialog never becomes visible/interactable
@@ -101,6 +140,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val idx = slotOf(camera)
         if (idx >= 0) {
             slots[idx] = null
+            videoSizes[idx] = null
             setStatus(idx, getString(R.string.status_waiting))
         }
         runCatching { camera.closeCamera() }.onFailure { FileLogger.log("closeCamera(detach) failed", it) }
@@ -134,6 +174,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val idx = slotOf(camera)
         if (idx >= 0) {
             slots[idx] = null
+            videoSizes[idx] = null
             setStatus(idx, getString(R.string.status_disconnected))
         }
         runCatching { camera.closeCamera() }
@@ -148,7 +189,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val idx = slotOf(self)
         if (idx < 0) return
         when (code) {
-            ICameraStateCallBack.State.OPENED -> hideStatus(idx)
+            ICameraStateCallBack.State.OPENED -> {
+                hideStatus(idx)
+                // getPreviewSize() holds the size UVC actually negotiated, which can differ
+                // from the requested 1280x720 (640x480 observed on Quest 2).
+                videoSizes[idx] = runCatching { self.getPreviewSize() }.getOrNull()
+                FileLogger.log("slot=$idx negotiated previewSize=${videoSizes[idx]?.width}x${videoSizes[idx]?.height}")
+                applyAspect(idx)
+            }
             ICameraStateCallBack.State.CLOSED -> setStatus(idx, getString(R.string.status_disconnected))
             ICameraStateCallBack.State.ERROR ->
                 setStatus(idx, getString(R.string.status_error, msg ?: "unknown"))
@@ -207,6 +255,54 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private fun slotOf(camera: MultiCameraClient.Camera): Int =
         slots.indexOfFirst { it?.getUsbDevice()?.deviceId == camera.getUsbDevice().deviceId }
 
+    // --- aspect handling --------------------------------------------------------
+
+    private fun applyAspectToAll() {
+        for (idx in 0 until SLOT_COUNT) applyAspect(idx)
+    }
+
+    /**
+     * AUSBC renders the frame stretched to fill the whole TextureView surface, so aspect
+     * correction is a display-time transform: scale the composited texture around the pane
+     * center, relative to that stretch-fill baseline.
+     */
+    private fun applyAspect(idx: Int) {
+        if (!::textures.isInitialized) return
+        val tv = textures[idx]
+        tv.post {
+            val viewW = tv.width.toFloat()
+            val viewH = tv.height.toFloat()
+            val size = videoSizes[idx]
+            if (viewW <= 0f || viewH <= 0f || size == null || size.width <= 0 || size.height <= 0) {
+                tv.setTransform(null)
+                return@post
+            }
+            val videoAr = size.width.toFloat() / size.height
+            val viewAr = viewW / viewH
+            var sx = 1f
+            var sy = 1f
+            when (aspectMode) {
+                AspectMode.STRETCH -> Unit
+                AspectMode.FIT_WIDTH -> sy = viewAr / videoAr
+                AspectMode.FIT_HEIGHT -> sx = videoAr / viewAr
+                AspectMode.FULL_FRAME ->
+                    if (videoAr > viewAr) sy = viewAr / videoAr else sx = videoAr / viewAr
+            }
+            tv.setTransform(Matrix().apply { setScale(sx, sy, viewW / 2f, viewH / 2f) })
+        }
+    }
+
+    private fun loadAspectMode(): AspectMode {
+        val name = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREF_ASPECT_MODE, null)
+        return AspectMode.values().firstOrNull { it.name == name } ?: AspectMode.FULL_FRAME
+    }
+
+    private fun saveAspectMode(mode: AspectMode) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(PREF_ASPECT_MODE, mode.name).apply()
+    }
+
     private fun buildRequest(): CameraRequest =
         CameraRequest.Builder()
             .setPreviewWidth(PREVIEW_WIDTH)
@@ -230,6 +326,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         FileLogger.setListener(null)
         logText = null
         logScroll = null
+        aspectToggle = null
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroyView()
     }
@@ -239,5 +336,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREVIEW_WIDTH = 1280
         private const val PREVIEW_HEIGHT = 720
         private const val MAX_LOG_LINES = 400
+        private const val PREFS_NAME = "camera_eyes"
+        private const val PREF_ASPECT_MODE = "aspect_mode"
     }
 }

@@ -75,7 +75,8 @@
         android:layout_marginTop="80dp"
         android:background="@color/log_scrim"
         android:fillViewport="true"
-        android:padding="8dp">
+        android:padding="8dp"
+        android:visibility="gone">
 
         <TextView
             android:id="@+id/logText"
@@ -97,7 +98,21 @@
         android:background="@color/status_scrim"
         android:paddingHorizontal="14dp"
         android:paddingVertical="8dp"
-        android:text="@string/log_hide"
+        android:text="@string/log_show"
+        android:textColor="@android:color/white"
+        android:textSize="14sp" />
+
+    <!-- Cycles how the video is scaled into each pane: stretch / H-fit / V-fit / full frame. -->
+    <TextView
+        android:id="@+id/aspectToggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_margin="8dp"
+        android:background="@color/status_scrim"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:text="@string/aspect_stretch"
         android:textColor="@android:color/white"
         android:textSize="14sp" />
 

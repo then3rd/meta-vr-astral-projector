@@ -10,5 +10,9 @@
     <string name="log_hide">Hide log</string>
     <string name="log_show">Show log</string>
     <string name="retry_permission">Retry permission</string>
+    <string name="aspect_stretch">Aspect: Stretch</string>
+    <string name="aspect_fit_width">Aspect: H-fit</string>
+    <string name="aspect_fit_height">Aspect: V-fit</string>
+    <string name="aspect_full_frame">Aspect: Full frame</string>
     <string name="camera_permission_denied">Camera permission is required to access USB cameras. Grant it in Settings and relaunch.</string>
 </resources>

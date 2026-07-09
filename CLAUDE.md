@@ -31,8 +31,15 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
 - 720p per camera; MJPEG is the UVC default in this AUSBC version (required — two uncompressed
   streams exceed USB 2.0 bandwidth). If the second camera errors, lower
   `PREVIEW_WIDTH`/`PREVIEW_HEIGHT` in the fragment.
+- Aspect modes: AUSBC 3.2.7 never calls `setAspectRatio` on the view in the `openCamera` path
+  (verified in the AAR bytecode) — it renders each frame stretched to fill the whole surface, hence
+  distortion. The fragment corrects at display time via `TextureView.setTransform` scaled around the
+  pane center, using the negotiated `camera.getPreviewSize()` (often 640x480, not the requested
+  720p). Four modes cycled by an on-screen button, persisted in SharedPreferences: Full frame
+  (default, letterbox), H-fit (fill width), V-fit (fill height), Stretch (legacy fill).
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
-  log overlay with show/hide toggle), per-slot status overlays, and a "retry permission" button.
+  log overlay with show/hide toggle, hidden by default), per-slot status overlays, and a "retry
+  permission" button.
 
 ## Critical dependency pins (do not "upgrade" blindly)
 
