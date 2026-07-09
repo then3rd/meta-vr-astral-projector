@@ -7,4 +7,6 @@
     <string name="status_disconnected">Camera disconnected</string>
     <string name="status_extra">Extra camera ignored\n(only two slots)</string>
     <string name="status_error">Camera error: %1$s\nTry lower resolution if two cameras won\'t co-exist.</string>
+    <string name="log_hide">Hide log</string>
+    <string name="log_show">Show log</string>
 </resources>

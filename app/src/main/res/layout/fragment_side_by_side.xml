@@ -1,63 +1,104 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="horizontal"
     android:background="@android:color/black">
 
-    <!-- LEFT camera slot -->
-    <FrameLayout
-        android:layout_width="0dp"
+    <!-- Camera panes -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_weight="1">
+        android:orientation="horizontal">
 
-        <com.jiangdg.ausbc.widget.AspectRatioTextureView
-            android:id="@+id/textureLeft"
-            android:layout_width="match_parent"
+        <!-- LEFT camera slot -->
+        <FrameLayout
+            android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_gravity="center" />
+            android:layout_weight="1">
+
+            <com.jiangdg.ausbc.widget.AspectRatioTextureView
+                android:id="@+id/textureLeft"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_gravity="center" />
+
+            <TextView
+                android:id="@+id/statusLeft"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:background="@color/status_scrim"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="10dp"
+                android:text="@string/status_waiting"
+                android:textColor="@android:color/white"
+                android:textSize="16sp" />
+        </FrameLayout>
+
+        <View
+            android:layout_width="2dp"
+            android:layout_height="match_parent"
+            android:background="@color/divider" />
+
+        <!-- RIGHT camera slot -->
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
+
+            <com.jiangdg.ausbc.widget.AspectRatioTextureView
+                android:id="@+id/textureRight"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_gravity="center" />
+
+            <TextView
+                android:id="@+id/statusRight"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:background="@color/status_scrim"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="10dp"
+                android:text="@string/status_waiting"
+                android:textColor="@android:color/white"
+                android:textSize="16sp" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- On-screen debug log overlay (bottom half, scrollable) -->
+    <ScrollView
+        android:id="@+id/logScroll"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="bottom"
+        android:layout_marginTop="80dp"
+        android:background="@color/log_scrim"
+        android:fillViewport="true"
+        android:padding="8dp">
 
         <TextView
-            android:id="@+id/statusLeft"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:background="@color/status_scrim"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp"
-            android:text="@string/status_waiting"
-            android:textColor="@android:color/white"
-            android:textSize="16sp" />
-    </FrameLayout>
-
-    <View
-        android:layout_width="2dp"
-        android:layout_height="match_parent"
-        android:background="@color/divider" />
-
-    <!-- RIGHT camera slot -->
-    <FrameLayout
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1">
-
-        <com.jiangdg.ausbc.widget.AspectRatioTextureView
-            android:id="@+id/textureRight"
+            android:id="@+id/logText"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_gravity="center" />
-
-        <TextView
-            android:id="@+id/statusRight"
-            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:background="@color/status_scrim"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp"
-            android:text="@string/status_waiting"
-            android:textColor="@android:color/white"
-            android:textSize="16sp" />
-    </FrameLayout>
+            android:fontFamily="monospace"
+            android:textColor="#FFCCFFCC"
+            android:textSize="10sp"
+            android:textIsSelectable="true" />
+    </ScrollView>
 
-</LinearLayout>
+    <!-- Toggle to show/hide the log panel -->
+    <TextView
+        android:id="@+id/logToggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:background="@color/status_scrim"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:text="@string/log_hide"
+        android:textColor="@android:color/white"
+        android:textSize="14sp" />
+
+</FrameLayout>

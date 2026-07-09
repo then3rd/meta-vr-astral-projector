@@ -11,6 +11,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FileLogger.init(this)
+        FileLogger.log("MainActivity.onCreate (intent action=${intent?.action})")
         setContentView(R.layout.activity_main)
 
         if (savedInstanceState == null) {

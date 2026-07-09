@@ -2,4 +2,5 @@
 <resources>
     <color name="status_scrim">#B3000000</color>
     <color name="divider">#FF2C2C2C</color>
+    <color name="log_scrim">#D9000000</color>
 </resources>
