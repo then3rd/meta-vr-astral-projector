@@ -46,9 +46,10 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   already upright and correctly-handed — the default is rotation 0 / flip off (an earlier assumed
   SurfaceTexture V-inversion / UVC mirror did NOT exist; the neutral transform is correct).
 - Settings UI: a transparent **⚙ Settings full-width bar spans the top of the panel** (over
-  passthrough, above/separate from the video frame). Tapping it toggles a transparent **vertical
-  column of controls centered over the video** (`settingsScroll`/`settingsList`) holding rotation,
-  flip, aspect, follow, smoothing, passthrough, curve/scale/gap sliders, swap, and a Debug button.
+  passthrough, above/separate from the video frame). Tapping it toggles a transparent **two-column
+  grid of controls centered over the video, below the bar** (`settingsScroll`/`settingsList`,
+  80dp top margin so it can't cover the bar): left column rotation, flip, aspect, follow, smoothing,
+  passthrough; right column curve/scale/gap sliders, swap, and a Debug button.
   The gap slider sizes a transparent spacer (`gapSpacer`, weight-based: 100% = half the row) between
   the two panes; each pane is black but the row is transparent, so passthrough shows in the gap. The
   column is hidden by default; only the bar shows until opened. Backgrounds are ~35% scrim

@@ -49,7 +49,11 @@
          is taller than the video, and without the margin its first item covers the bar. -->
     <ScrollView android:id="@+id/settingsScroll" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:layout_marginTop="80dp" android:paddingVertical="8dp" android:scrollbars="none" android:visibility="gone">
 
-        <LinearLayout android:id="@+id/settingsList" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center_horizontal" android:orientation="vertical">
+        <!-- Two side-by-side columns so all tiles fit on screen without scrolling. Controller focus
+             stepping (collectFocusables) is recursive, so it walks left column then right. -->
+        <LinearLayout android:id="@+id/settingsList" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:orientation="vertical">
 
             <TextView android:id="@+id/rotationToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/rotation_label" android:textColor="@android:color/white" android:textSize="14sp" />
 
@@ -62,6 +66,9 @@
             <TextView android:id="@+id/smoothingToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/smoothing_off" android:textColor="@android:color/white" android:textSize="14sp" />
 
             <TextView android:id="@+id/passthroughToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/passthrough_on" android:textColor="@android:color/white" android:textSize="14sp" />
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical">
 
             <!-- Curve slider column -->
             <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
@@ -90,6 +97,7 @@
             <TextView android:id="@+id/swapToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />
 
             <TextView android:id="@+id/logToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_show" android:textColor="@android:color/white" android:textSize="14sp" />
+            </LinearLayout>
         </LinearLayout>
     </ScrollView>
 
