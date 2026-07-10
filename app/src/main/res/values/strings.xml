@@ -9,6 +9,7 @@
     <string name="status_error">Camera error: %1$s\nTry lower resolution if two cameras won\'t co-exist.</string>
     <string name="log_hide">Hide log</string>
     <string name="log_show">Show log</string>
+    <string name="build_time_label">Build time: %1$s</string>
     <string name="retry_permission">Retry permission</string>
     <string name="aspect_stretch">Aspect: Stretch</string>
     <string name="aspect_fit_width">Aspect: H-fit</string>
@@ -18,6 +19,8 @@
     <string name="rotation_label">Rotate: %1$d°</string>
     <string name="flip_h_on">Flip H: On</string>
     <string name="flip_h_off">Flip H: Off</string>
+    <string name="settings_open">⚙ Settings</string>
+    <string name="settings_close">✕ Close</string>
     <string name="head_follow_on">Follow: On</string>
     <string name="head_follow_off">Follow: Off</string>
     <string name="smoothing_on">Smooth: On</string>

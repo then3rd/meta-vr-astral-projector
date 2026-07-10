@@ -110,10 +110,13 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     // On-screen log overlay (retrievable without ADB or a card reader).
     private var logText: TextView? = null
     private var logScroll: ScrollView? = null
+    private var logOverlay: View? = null
     private val logLines = ArrayDeque<String>()
 
-    // Settings bar (always visible below the video). Kept for controller focus navigation.
+    // Settings controls row (toggled by the gear button; hidden by default).
     private var settingsList: ViewGroup? = null
+    private var settingsScroll: View? = null
+    private var settingsToggle: TextView? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
@@ -127,18 +130,28 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
         logScroll = root.findViewById(R.id.logScroll)
         logText = root.findViewById(R.id.logText)
+        logOverlay = root.findViewById(R.id.logOverlay)
         val logToggle = root.findViewById<TextView>(R.id.logToggle)
-        logToggle.setOnClickListener {
-            val show = logScroll?.visibility != View.VISIBLE
-            logScroll?.visibility = if (show) View.VISIBLE else View.GONE
+        val logClose = root.findViewById<TextView>(R.id.logClose)
+        val setLogVisible = { show: Boolean ->
+            logOverlay?.visibility = if (show) View.VISIBLE else View.GONE
             logToggle.text = str(if (show) R.string.log_hide else R.string.log_show)
         }
+        logToggle.setOnClickListener {
+            setLogVisible(logOverlay?.visibility != View.VISIBLE)
+        }
+        logClose.setOnClickListener { setLogVisible(false) }
 
-        // Settings bar is always visible below the video; keep a handle for controller focus nav.
+        // Gear button toggles the (transparent) controls row, which is hidden by default.
         settingsList = root.findViewById(R.id.settingsList)
+        settingsScroll = root.findViewById(R.id.settingsScroll)
+        val settingsBtn = root.findViewById<TextView>(R.id.settingsToggle)
+        settingsToggle = settingsBtn
+        settingsBtn.setOnClickListener { toggleSettings() }
 
         root.findViewById<TextView>(R.id.buildTimestamp).text =
-            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(BuildConfig.BUILD_TIME))
+            str(R.string.build_time_label,
+                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(BuildConfig.BUILD_TIME)))
 
         aspectMode = loadAspectMode()
         val aspectBtn = root.findViewById<TextView>(R.id.aspectToggle)
@@ -626,23 +639,38 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         FileLogger.setListener(null)
         logText = null
         logScroll = null
+        logOverlay = null
         aspectToggle = null
         rotationToggle = null
         flipToggle = null
         settingsList = null
+        settingsScroll = null
+        settingsToggle = null
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroyView()
     }
 
-    // --- controller input for the always-visible settings bar -------------------
+    // --- settings toggle + controller input -------------------------------------
     //
-    // The settings bar sits permanently below the video (easy pointer/hand-ray access), so there's
-    // no show/hide. A Quest controller can still drive it: MENU/Y moves focus into (or out of) the
-    // bar, then left/right step across items, up/down nudge a focused slider, and A/center clicks.
-    // We only intercept navigation keys while the bar actually holds focus, so normal pointer use
-    // of the camera view is unaffected.
+    // A gear button above the video toggles the (highly transparent) controls row, which is hidden
+    // by default. A Quest controller can also drive it: MENU/Y opens the controls and focuses them
+    // (or hides them if already open), then left/right step across items, up/down nudge a focused
+    // slider, and A/center clicks. Navigation keys are only intercepted while the controls hold
+    // focus, so normal pointer/hand-ray use of the camera view is unaffected.
 
-    /** Ordered list of focusable controls in the bar (buttons + sliders), left to right. */
+    fun isSettingsVisible(): Boolean = settingsScroll?.visibility == View.VISIBLE
+
+    fun toggleSettings() = setSettingsVisible(!isSettingsVisible())
+
+    private fun setSettingsVisible(show: Boolean) {
+        val scroll = settingsScroll ?: return
+        scroll.visibility = if (show) View.VISIBLE else View.GONE
+        settingsToggle?.text = str(if (show) R.string.settings_close else R.string.settings_open)
+        FileLogger.log("settings controls ${if (show) "shown" else "hidden"}")
+        if (!show) view?.findFocus()?.clearFocus()
+    }
+
+    /** Ordered list of focusable controls in the row (buttons + sliders), left to right. */
     private fun barItems(): List<View> {
         val list = settingsList ?: return emptyList()
         val out = ArrayList<View>()
@@ -667,27 +695,32 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
     fun handleControllerKey(keyCode: Int): Boolean {
         if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BUTTON_Y) {
-            if (barHasFocus()) view?.findFocus()?.clearFocus() else focusFirstItem()
+            if (isSettingsVisible()) {
+                setSettingsVisible(false)
+            } else {
+                setSettingsVisible(true)
+                focusFirstItem()
+            }
             return true
         }
-        if (!barHasFocus()) return false
+        if (!isSettingsVisible() || !barHasFocus()) return false
         return when (keyCode) {
             KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
-                view?.findFocus()?.clearFocus(); true
+                setSettingsVisible(false); true
             }
-            KeyEvent.KEYCODE_DPAD_LEFT -> moveFocusStep(-1)
-            KeyEvent.KEYCODE_DPAD_RIGHT -> moveFocusStep(+1)
-            KeyEvent.KEYCODE_DPAD_UP -> nudgeSlider(+1)
-            KeyEvent.KEYCODE_DPAD_DOWN -> nudgeSlider(-1)
+            KeyEvent.KEYCODE_DPAD_UP -> moveFocusStep(-1)
+            KeyEvent.KEYCODE_DPAD_DOWN -> moveFocusStep(+1)
+            KeyEvent.KEYCODE_DPAD_LEFT -> nudgeSlider(-1)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> nudgeSlider(+1)
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_ENTER ->
                 view?.findFocus()?.performClick() ?: false
             else -> false
         }
     }
 
-    /** Thumbstick / hat navigation, active only once the bar holds focus. Debounced. */
+    /** Thumbstick / hat navigation, active only while the controls are open and hold focus. */
     fun handleControllerMotion(event: MotionEvent): Boolean {
-        if (!barHasFocus()) return false
+        if (!isSettingsVisible() || !barHasFocus()) return false
         if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
         val x = event.getAxisValue(MotionEvent.AXIS_X).let {
             if (it == 0f) event.getAxisValue(MotionEvent.AXIS_HAT_X) else it
@@ -698,10 +731,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val now = System.currentTimeMillis()
         if (now - lastStickMove < STICK_REPEAT_MS) return true
         val consumed = when {
-            x < -STICK_DEADZONE -> moveFocusStep(-1)
-            x > STICK_DEADZONE -> moveFocusStep(+1)
-            y < -STICK_DEADZONE -> nudgeSlider(+1)
-            y > STICK_DEADZONE -> nudgeSlider(-1)
+            y < -STICK_DEADZONE -> moveFocusStep(-1)
+            y > STICK_DEADZONE -> moveFocusStep(+1)
+            x < -STICK_DEADZONE -> nudgeSlider(-1)
+            x > STICK_DEADZONE -> nudgeSlider(+1)
             else -> false
         }
         if (consumed) lastStickMove = now
@@ -711,7 +744,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private fun focusFirstItem(): Boolean =
         barItems().firstOrNull()?.let { it.post { it.requestFocus() }; true } ?: false
 
-    /** Moves focus [step] items along the bar (wrapping), independent of on-screen geometry. */
+    /** Moves focus [step] items along the column (wrapping), independent of on-screen geometry. */
     private fun moveFocusStep(step: Int): Boolean {
         val items = barItems()
         if (items.isEmpty()) return false

@@ -45,22 +45,23 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   one is dialed in on-device rather than hard-coded. Note: the raw frames from these cameras are
   already upright and correctly-handed — the default is rotation 0 / flip off (an earlier assumed
   SurfaceTexture V-inversion / UVC mirror did NOT exist; the neutral transform is correct).
-- Settings bar: all controls (rotation, flip, aspect, swap, follow, smoothing, curve/scale sliders,
-  retry-permission, log toggle, build timestamp) live in a persistent, horizontally-scrollable bar
-  **below the video** (`settingsList` inside a `HorizontalScrollView`). No show/hide — the earlier
-  corner gear button was hard to reach in-headset. The bar's background is transparent and the
-  buttons are semi-transparent (`settings_item_bg`, ~35% scrim + focus highlight), so Quest
-  passthrough shows behind them. The panel (`ImmersiveActivity`) is grown taller than the video
-  (1920x1160 px / 2.4x1.45 m vs the 1920x960 video region) so this strip sits over passthrough
-  rather than shrinking the video.
+- Settings UI: a transparent **⚙ gear button floats centered in a strip above the video** (top of
+  the panel, over passthrough, separate from the video frame). Tapping it toggles a transparent
+  **vertical column of controls centered over the video** (`settingsScroll`/`settingsList`) holding
+  rotation, flip, aspect, swap, follow, smoothing, curve/scale sliders, retry-permission, log
+  toggle, build timestamp. The column is hidden by default; only the gear shows until opened.
+  Backgrounds are ~35% scrim (`settings_item_bg`) with text drop-shadows so passthrough/video shows
+  behind. The panel (`ImmersiveActivity`) is grown taller than the video (1920x1160 px /
+  2.4x1.45 m vs the 1920x960 video region) so the gear strip sits over passthrough rather than
+  shrinking the video.
 - Controller input: `MainActivity.dispatchKeyEvent`/`onGenericMotionEvent` forward to the fragment
-  (`handleControllerKey`/`handleControllerMotion`). MENU or Y moves focus into (or out of) the bar;
-  once the bar holds focus, D-pad/stick left-right step across items (`moveFocusStep`, geometry-
-  independent so it works in the horizontal row), up-down nudge a focused slider (committing
+  (`handleControllerKey`/`handleControllerMotion`). MENU or Y opens the column (and focuses the
+  first item) or hides it if already open; while open and focused, D-pad/stick up-down step through
+  the column (`moveFocusStep`, geometry-independent), left-right nudge a focused slider (committing
   directly, since programmatic `setProgress` doesn't fire `fromUser`), A/DPAD-center clicks, and
-  B/BACK drops focus back to the camera view. Navigation keys are only intercepted while the bar
-  holds focus, so pointer/hand-ray use is unaffected. Pointer taps remain the guaranteed path;
-  controller support is untested on hardware.
+  B/BACK hides the column. Navigation keys are only intercepted while the controls hold focus, so
+  pointer/hand-ray use is unaffected. Pointer taps remain the guaranteed path; controller support is
+  untested on hardware.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
   log overlay with show/hide toggle, hidden by default, now inside the settings menu), per-slot
   status overlays, and a "retry permission" button.

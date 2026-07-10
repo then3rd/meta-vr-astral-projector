@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent">
 
-    <!-- Video on top, settings bar below. The bar's area is transparent so Quest passthrough
-         (the real world) shows behind the semi-transparent buttons. -->
+    <!-- Settings gear button floats centered in a strip above the video (over passthrough).
+         The video sits below. Toggling the gear reveals a centered column of controls that
+         overlays the video (declared later so it draws on top). -->
     <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+
+        <!-- Top strip: settings button spans the full width, floating over passthrough. -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingHorizontal="8dp" android:paddingVertical="8dp">
+
+            <TextView android:id="@+id/settingsToggle" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="16sp" />
+        </LinearLayout>
 
         <!-- Camera panes (black so letterbox bars and empty slots stay black). -->
         <LinearLayout android:id="@+id/videoRow" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:background="@android:color/black" android:orientation="horizontal">
@@ -26,55 +33,64 @@
                 <TextView android:id="@+id/statusRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:background="@color/status_scrim" android:paddingHorizontal="16dp" android:paddingVertical="10dp" android:text="@string/status_waiting" android:textColor="@android:color/white" android:textSize="16sp" />
             </FrameLayout>
         </LinearLayout>
-
-        <!-- Persistent settings bar, just below the video. Transparent background over passthrough;
-             horizontally scrollable so every control is reachable. Items are focusable so a Quest
-             controller / gamepad can drive them (see MainActivity input forwarding). -->
-        <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="8dp" android:scrollbars="none">
-
-            <LinearLayout android:id="@+id/settingsList" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal" android:paddingHorizontal="10dp">
-
-                <TextView android:id="@+id/rotationToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/rotation_label" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/flipToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/flip_h_off" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/aspectToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/aspect_stretch" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/swapToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/headFollowToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/head_follow_on" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/smoothingToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/smoothing_off" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <!-- Curve slider column -->
-                <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="6dp">
-
-                    <TextView android:id="@+id/curveLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/curve_label" android:textColor="@android:color/white" android:textSize="12sp" />
-
-                    <SeekBar android:id="@+id/curveSlider" android:layout_width="200dp" android:layout_height="wrap_content" android:max="100" />
-                </LinearLayout>
-
-                <!-- Scale slider column -->
-                <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="6dp">
-
-                    <TextView android:id="@+id/scaleLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/scale_label" android:textColor="@android:color/white" android:textSize="12sp" />
-
-                    <SeekBar android:id="@+id/scaleSlider" android:layout_width="200dp" android:layout_height="wrap_content" android:max="100" />
-                </LinearLayout>
-
-                <TextView android:id="@+id/permissionRetry" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/retry_permission" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/logToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="16dp" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_show" android:textColor="@android:color/white" android:textSize="14sp" />
-
-                <TextView android:id="@+id/buildTimestamp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:fontFamily="monospace" android:paddingHorizontal="8dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:textColor="#DDFFFFFF" android:textSize="10sp" />
-            </LinearLayout>
-        </HorizontalScrollView>
     </LinearLayout>
 
-    <!-- On-screen debug log overlay (covers the video area when shown). -->
-    <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="bottom" android:layout_marginTop="80dp" android:background="@color/log_scrim" android:fillViewport="true" android:padding="8dp" android:visibility="gone">
+    <!-- Settings controls — a transparent vertical column centered over the video. Hidden by
+         default; toggled by the gear button. Scrollable in case it exceeds the height. Items are
+         focusable so a Quest controller / gamepad can drive them (see MainActivity input forwarding). -->
+    <ScrollView android:id="@+id/settingsScroll" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:paddingVertical="8dp" android:scrollbars="none" android:visibility="gone">
 
-        <TextView android:id="@+id/logText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textColor="#FFCCFFCC" android:textSize="10sp" android:textIsSelectable="true" />
+        <LinearLayout android:id="@+id/settingsList" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center_horizontal" android:orientation="vertical">
+
+            <TextView android:id="@+id/rotationToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/rotation_label" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/flipToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/flip_h_off" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/aspectToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/aspect_stretch" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/headFollowToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/head_follow_on" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/smoothingToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/smoothing_off" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <!-- Curve slider column -->
+            <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
+
+                <TextView android:id="@+id/curveLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/curve_label" android:textColor="@android:color/white" android:textSize="12sp" />
+
+                <SeekBar android:id="@+id/curveSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+            </LinearLayout>
+
+            <!-- Scale slider column -->
+            <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
+
+                <TextView android:id="@+id/scaleLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/scale_label" android:textColor="@android:color/white" android:textSize="12sp" />
+
+                <SeekBar android:id="@+id/scaleSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+            </LinearLayout>
+
+            <TextView android:id="@+id/swapToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/permissionRetry" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/retry_permission" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/logToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_show" android:textColor="@android:color/white" android:textSize="14sp" />
+        </LinearLayout>
     </ScrollView>
+
+    <!-- On-screen debug log overlay (covers the video area when shown). A header row with the build
+         time and a close button sits on top so it can always be dismissed. -->
+    <LinearLayout android:id="@+id/logOverlay" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="80dp" android:background="@color/log_scrim" android:orientation="vertical" android:padding="8dp" android:visibility="gone">
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingBottom="8dp">
+
+            <TextView android:id="@+id/buildTimestamp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="16dp" android:fontFamily="monospace" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:textColor="#DDFFFFFF" android:textSize="11sp" />
+
+            <TextView android:id="@+id/logClose" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_hide" android:textColor="@android:color/white" android:textSize="14sp" />
+        </LinearLayout>
+
+        <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true" android:scrollbars="vertical">
+
+            <TextView android:id="@+id/logText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textColor="#FFCCFFCC" android:textSize="10sp" android:textIsSelectable="true" />
+        </ScrollView>
+    </LinearLayout>
 
 </FrameLayout>

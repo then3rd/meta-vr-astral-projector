@@ -56,7 +56,7 @@ object SpatialControls {
     }
 
     fun isSmoothingEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_SMOOTHING, false)
+        prefs(context).getBoolean(KEY_SMOOTHING, true)
 
     fun setSmoothingEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SMOOTHING, enabled).apply()
