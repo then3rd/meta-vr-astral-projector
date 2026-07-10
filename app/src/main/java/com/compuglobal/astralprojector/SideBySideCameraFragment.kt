@@ -395,8 +395,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             val viewH = tv.height.toFloat()
             val size = videoSizes[logicalIdx]
             if (viewW <= 0f || viewH <= 0f || size == null || size.width <= 0 || size.height <= 0) {
-                // Still flip vertically (see below) even before a video size is known.
-                tv.setTransform(Matrix().apply { setScale(1f, -1f, viewW / 2f, viewH / 2f) })
+                // No flip needed — raw orientation is correct.
+                tv.setTransform(Matrix().apply { setScale(1f, 1f, viewW / 2f, viewH / 2f) })
                 return@post
             }
             val videoAr = size.width.toFloat() / size.height
@@ -410,9 +410,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 AspectMode.FULL_FRAME ->
                     if (videoAr > viewAr) sy = viewAr / videoAr else sx = videoAr / viewAr
             }
-            // The panel composites the TextureView's SurfaceTexture with an inverted V axis, so
-            // the camera video comes out upside down. Flip it back by negating the Y scale.
-            sy = -sy
+            // No flip: raw frames are already in the correct orientation for these cameras.
             tv.setTransform(Matrix().apply { setScale(sx, sy, viewW / 2f, viewH / 2f) })
         }
     }
