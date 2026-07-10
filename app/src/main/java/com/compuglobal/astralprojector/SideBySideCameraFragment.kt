@@ -17,6 +17,9 @@ import com.jiangdg.ausbc.callback.ICameraStateCallBack
 import com.jiangdg.ausbc.camera.bean.CameraRequest
 import com.jiangdg.ausbc.camera.bean.PreviewSize
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Shows up to two UVC cameras side-by-side.
@@ -113,6 +116,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             logScroll?.visibility = if (show) View.VISIBLE else View.GONE
             logToggle.text = str(if (show) R.string.log_hide else R.string.log_show)
         }
+
+        root.findViewById<TextView>(R.id.buildTimestamp).text =
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(BuildConfig.BUILD_TIME))
 
         aspectMode = loadAspectMode()
         val aspectBtn = root.findViewById<TextView>(R.id.aspectToggle)

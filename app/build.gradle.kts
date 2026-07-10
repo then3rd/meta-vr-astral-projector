@@ -21,6 +21,10 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
+
+        // Bake the wall-clock build time in as a Unix epoch millisecond long so it survives
+        // ProGuard and can be formatted at runtime without adding a string resource.
+        buildConfigField("long", "BUILD_TIME", "${System.currentTimeMillis()}L")
     }
 
     buildTypes {
@@ -44,6 +48,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 }
 
