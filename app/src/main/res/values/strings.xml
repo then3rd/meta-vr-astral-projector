@@ -11,6 +11,9 @@
     <string name="log_show">Debug</string>
     <string name="build_time_label">Build time: %1$s</string>
     <string name="retry_permission">Retry permission</string>
+    <string name="stereo_exit">Exit Stereo</string>
+    <string name="stereo_on">Stereo: On</string>
+    <string name="stereo_off">Stereo: Off</string>
     <string name="passthrough_on">Passthrough: On</string>
     <string name="passthrough_off">Passthrough: Off</string>
     <string name="aspect_stretch">Aspect: Stretch</string>

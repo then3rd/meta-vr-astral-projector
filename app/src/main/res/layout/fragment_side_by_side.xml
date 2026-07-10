@@ -8,12 +8,36 @@
 
         <!-- Top strip: settings and reset buttons sit side by side, centered as a pair, floating
              over passthrough. -->
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingHorizontal="8dp" android:paddingVertical="8dp">
+        <LinearLayout android:id="@+id/topBar" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingHorizontal="8dp" android:paddingVertical="8dp">
 
             <TextView android:id="@+id/settingsToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="16sp" />
 
             <!-- Restores every setting (pane prefs + spatial controls) to its default. -->
             <TextView android:id="@+id/resetButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/reset_label" android:textColor="@android:color/white" android:textSize="16sp" />
+
+            <!-- Binocular mode: left camera -> left eye, right camera -> right eye. Recreates the
+                 panel (brief blackout) with StereoMode.LeftRight. Lives in the top bar next to the
+                 gear so it's reachable without opening the settings column. -->
+            <TextView android:id="@+id/stereoToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/stereo_off" android:textColor="@android:color/white" android:textSize="16sp" />
+        </LinearLayout>
+
+        <!-- Stereo-only per-eye gear row. Placed in the vertical layout (not as a floating overlay)
+             so, like the mono top bar, it occupies a transparent strip that pushes the video down —
+             giving passthrough behind the gear buttons. Duplicated once per half so each eye sees
+             its own copy. Hidden (and inert) in mono mode. -->
+        <LinearLayout android:id="@+id/stereoGearRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingTop="8dp" android:visibility="gone">
+            <FrameLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1">
+                <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center_horizontal" android:orientation="horizontal">
+                    <TextView android:id="@+id/stereoGearLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="24dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="14sp" />
+                    <TextView android:id="@+id/stereoExitLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="24dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/stereo_exit" android:textColor="@android:color/white" android:textSize="14sp" />
+                </LinearLayout>
+            </FrameLayout>
+            <FrameLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1">
+                <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center_horizontal" android:orientation="horizontal">
+                    <TextView android:id="@+id/stereoGearRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="24dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="14sp" />
+                    <TextView android:id="@+id/stereoExitRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="24dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/stereo_exit" android:textColor="@android:color/white" android:textSize="14sp" />
+                </LinearLayout>
+            </FrameLayout>
         </LinearLayout>
 
         <!-- Camera panes. Each pane is black (so letterbox bars and empty slots stay black) but the
@@ -74,8 +98,8 @@
 
             <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical">
 
-            <!-- Curve slider column -->
-            <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
+            <!-- Curve slider column (hidden in stereo mode: stereo is flat-quad only) -->
+            <LinearLayout android:id="@+id/curveTile" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
 
                 <TextView android:id="@+id/curveLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/curve_label" android:textColor="@android:color/white" android:textSize="12sp" />
 
@@ -125,4 +149,16 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Stereo-only settings column. Duplicated once per half of the surface at identical positions,
+         so each eye sees its own copy and fuses them into a single floating control. The per-eye
+         gear buttons that open this live in stereoGearRow (in the vertical layout above, over the
+         passthrough strip). Hidden (and inert) in mono mode. -->
+    <LinearLayout android:id="@+id/stereoOverlay" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:visibility="gone">
+        <FrameLayout android:id="@+id/stereoHalfLeft" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1">
+            <include layout="@layout/stereo_settings" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" />
+        </FrameLayout>
+        <FrameLayout android:id="@+id/stereoHalfRight" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1">
+            <include layout="@layout/stereo_settings" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" />
+        </FrameLayout>
+    </LinearLayout>
 </FrameLayout>

@@ -75,6 +75,46 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   B/BACK hides the column. Navigation keys are only intercepted while the controls hold focus, so
   pointer/hand-ray use is unaffected. Pointer taps remain the guaranteed path; controller support is
   untested on hardware.
+- Stereo (binocular) mode: `stereoToggle` lives in the mono top bar (next to the ⚙ Settings and
+  ↺ Reset buttons, so it's reachable without opening the settings column) and sets
+  `SpatialControls.KEY_STEREO`; `ImmersiveActivity`'s pref listener zeroes the curve and calls
+  `recreatePanel()` (destroy the panel entity, recreate after a 150 ms delay). The
+  `PanelRegistration.config {}` lambda re-runs on every panel creation (config modifiers are
+  re-applied each time `panelCreator` runs), so it reads the stereo pref live: stereo sets
+  `stereoMode = StereoMode.LeftRight` (left half of the 1920x1160 surface → left eye only, right
+  half → right eye only — the existing side-by-side panes become per-eye views) and panel width
+  1.2 m (per-eye aspect of a 960x1160 half). `enableTransparent` stays true — the scene-texture
+  path it forces supports per-eye sampling (`SceneMaterial.setStereoMode` in the bytecode) — so
+  the stereo menu floats over passthrough like the mono one. There is NO runtime stereo
+  setter on `PanelSceneObject` (verified in the 0.13.1 bytecode) — recreation is the only way to
+  switch. Recreating tears down the panel's virtual display, finishing and relaunching
+  `MainActivity`; cameras reconnect through the normal attach flow (~1-3 s blackout). In stereo the
+  fragment hides all full-width overlays (each eye sees only half the surface, so full-width UI
+  causes binocular rivalry) and instead shows **per-eye duplicated controls**: `stereo_settings.xml`
+  is `<include>`d once per half at identical positions (`stereoGearRow`/`stereoOverlay` in the
+  fragment layout), so the eyes fuse the two copies into one floating menu. `stereoGearRow` (the
+  per-eye ⚙ gear buttons that open the menu) sits INSIDE the vertical layout in the same slot the
+  mono top bar occupies — not as a floating overlay — so it pushes the video down and leaves a
+  transparent strip with passthrough behind the gears (a floating overlay would sit over the black
+  pane top instead, since in stereo the panes fill the whole surface). It holds rotation, flip,
+  aspect, follow, smoothing, passthrough toggles, scale + gap sliders, Swap, and Exit Stereo —
+  everything the mono column has EXCEPT curve (stereo is flat-quad only). Exit Stereo lives in the
+  per-eye `stereoGearRow` next to the ⚙ gear (mirroring how Enable Stereo sits next to Settings in
+  mono), so leaving stereo doesn't require opening the menu. `wireStereoSettings` keeps
+  the copies in sync (acting on either commits the change and refreshes both copies' labels;
+  programmatic slider `setProgress` doesn't recurse since `fromUser=false`). Controller: MENU/Y (or tapping a gear) toggles the menu, focus stepping runs
+  on the left copy only (`barItems` switches container), B/BACK with the menu closed exits to mono.
+  CRITICAL — stereo input remap: the SDK's panel input pipeline is stereo-UNAWARE (0.13.1 bytecode:
+  `PanelShape` passes StereoMode only to the compositor layers, `PanelInputListener` never reads
+  it), so a ray hit maps across the FULL surface width while each eye sees one half stretched to
+  the whole quad — taps land at 2x the horizontal surface position of what the user aims at.
+  `MainActivity.dispatchTouchEvent`/`dispatchGenericMotionEvent` (pointer-class only) halve x in
+  stereo, routing every pointer event to the left copy at the visually-corresponding spot; the
+  right copy is display-only.
+  The gap slider acts as a divergence trim (max weight clamped to 0.5). Stereo is flat-quad only
+  (`applyPanelCurve`
+  early-returns); the app always boots mono (`resetToDefaults` at launch). Dial in Swap/rotation in
+  mono first, then enter stereo; per-eye check: cover one lens, only that eye should go dark.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
   **Debug** overlay, opened by the "Debug" button in the settings menu, hidden by default). The
   Debug overlay's bottom control row holds the build timestamp, the **retry-permission** button, and

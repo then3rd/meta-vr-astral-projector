@@ -123,6 +123,20 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     /** Transparent spacer between the panes; its layout weight sets the passthrough gap. */
     private var gapSpacer: View? = null
 
+    // Snapshot of the stereo pref at view creation. The panel (and with it this fragment) is
+    // recreated whenever the pref flips, so the flag is stable for the view's lifetime: in stereo
+    // all full-width overlays stay hidden (each eye sees only half the surface, so a full-width
+    // UI would show a different half to each eye). A duplicated per-eye settings column
+    // (gear button / MENU / Y) exposes scale, gap, swap and exit; B/BACK drops back to mono.
+    private var stereoOn = false
+
+    // Stereo-only controls: a compact settings column duplicated once per half at identical
+    // positions so the eyes fuse the two copies into one menu. The list holds the two half
+    // containers (left first — controller focus navigation runs on the left copy).
+    private var stereoOverlay: View? = null
+    private var stereoGearRow: View? = null
+    private var stereoHalves: List<View> = emptyList()
+
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
         // Cache the application context so status-string lookups from AUSBC camera callbacks don't
@@ -242,6 +256,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             FileLogger.log("passthrough -> $next")
         }
 
+        // Binocular mode: left camera -> left eye, right camera -> right eye. Writing the pref
+        // makes ImmersiveActivity recreate the panel with StereoMode.LeftRight, which finishes
+        // and relaunches this fragment's activity — so the button only ever turns stereo ON
+        // (the settings menu is unreachable while stereo is active; MENU/Y exits instead).
+        stereoOn = SpatialControls.isStereoEnabled(requireContext())
+        root.findViewById<TextView>(R.id.stereoToggle).setOnClickListener {
+            FileLogger.log("stereo toggle tapped -> on (panel will recreate)")
+            // Each eye only sees half the surface, so stereo wants a larger panel — default it to 150%.
+            SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_STEREO_SCALE)
+            SpatialControls.setStereoEnabled(requireContext(), true)
+        }
+
         // Curve slider: 0..100% maps directly to curve amount 0.0..1.0 (flat -> cylinder).
         val curveLabel = root.findViewById<TextView>(R.id.curveLabel)
         val curveSlider = root.findViewById<SeekBar>(R.id.curveSlider)
@@ -314,9 +340,164 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             FileLogger.log("manual permission retry tapped")
             retryAllPendingPermissions()
         }
+
+        if (stereoOn) {
+            root.findViewById<View>(R.id.topBar)?.visibility = View.GONE
+            root.findViewById<View>(R.id.curveTile)?.visibility = View.GONE
+            settingsScroll?.visibility = View.GONE
+            settingsScrim?.visibility = View.GONE
+            logOverlay?.visibility = View.GONE
+            wireStereoSettings(root)
+            FileLogger.log("stereo mode active: per-eye settings wired, B/BACK exits to mono")
+        }
         // Stream every log line (including ones buffered before now) to the overlay.
         FileLogger.setListener { line -> appendLog(line) }
         return root
+    }
+
+    /**
+     * Wires the stereo-only controls: a gear button and a compact settings column (scale, gap,
+     * swap, exit), each duplicated once per half of the surface so both eyes see an identical,
+     * fusable copy. Acting on either copy commits the change and mirrors the other copy's state.
+     */
+    private fun wireStereoSettings(root: View) {
+        stereoOverlay = root.findViewById(R.id.stereoOverlay)
+        stereoGearRow = root.findViewById<View>(R.id.stereoGearRow).also { it.visibility = View.VISIBLE }
+        val halves = listOf<View>(
+            root.findViewById(R.id.stereoHalfLeft),
+            root.findViewById(R.id.stereoHalfRight),
+        )
+        stereoHalves = halves
+        listOf<TextView>(root.findViewById(R.id.stereoGearLeft), root.findViewById(R.id.stereoGearRight))
+            .forEach { gear -> gear.setOnClickListener { toggleSettings() } }
+        // Exit lives next to the gear (mirroring how Enable Stereo sits next to Settings in mono),
+        // so leaving stereo doesn't require opening the menu first.
+        listOf<TextView>(root.findViewById(R.id.stereoExitLeft), root.findViewById(R.id.stereoExitRight))
+            .forEach { exit ->
+                exit.setOnClickListener {
+                    FileLogger.log("exit stereo tapped -> mono (panel will recreate)")
+                    SpatialControls.setStereoEnabled(requireContext(), false)
+                }
+            }
+
+        val ctx = requireContext()
+        val scaleSliders = halves.map { it.findViewById<SeekBar>(R.id.stScaleSlider) }
+        val scaleLabels = halves.map { it.findViewById<TextView>(R.id.stScaleLabel) }
+        val gapSliders = halves.map { it.findViewById<SeekBar>(R.id.stGapSlider) }
+        val gapLabels = halves.map { it.findViewById<TextView>(R.id.stGapLabel) }
+
+        val initialScale = SpatialControls.getPanelScale(ctx)
+        val initialGap = loadGapPct()
+        scaleSliders.forEach { it.progress = scaleToProgress(initialScale) }
+        scaleLabels.forEach { it.text = str(R.string.scale_label, (initialScale * 100f).toInt()) }
+        gapSliders.forEach { it.progress = initialGap }
+        gapLabels.forEach { it.text = str(R.string.gap_label, initialGap) }
+
+        scaleSliders.forEachIndexed { i, slider ->
+            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                    val scale = progressToScale(progress)
+                    scaleLabels.forEach { it.text = str(R.string.scale_label, (scale * 100f).toInt()) }
+                    if (fromUser) {
+                        SpatialControls.setPanelScale(requireContext(), scale)
+                        // Mirror the other eye's copy (programmatic setProgress won't recurse:
+                        // it arrives with fromUser = false).
+                        scaleSliders[1 - i].progress = progress
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) = Unit
+                override fun onStopTrackingTouch(sb: SeekBar) = Unit
+            })
+        }
+        gapSliders.forEachIndexed { i, slider ->
+            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                    gapLabels.forEach { it.text = str(R.string.gap_label, progress) }
+                    if (fromUser) {
+                        applyGap(progress)
+                        saveGapPct(progress)
+                        gapSliders[1 - i].progress = progress
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) = Unit
+                override fun onStopTrackingTouch(sb: SeekBar) = Unit
+            })
+        }
+        // Toggle rows duplicated per eye. Each acts on shared state, then refreshes BOTH copies'
+        // labels so the fused menu stays consistent. Curve is deliberately absent — stereo is a
+        // flat quad (ImmersiveActivity.applyPanelCurve early-returns while stereo is on).
+        val rotationBtns = halves.map { it.findViewById<TextView>(R.id.stRotation) }
+        rotationBtns.forEach { it.text = str(R.string.rotation_label, rotationDeg) }
+        rotationBtns.forEach { btn ->
+            btn.setOnClickListener {
+                rotationDeg = (rotationDeg + 90) % 360
+                saveRotation(rotationDeg)
+                applyAspectToAll()
+                rotationBtns.forEach { it.text = str(R.string.rotation_label, rotationDeg) }
+                FileLogger.log("stereo rotation -> $rotationDeg")
+            }
+        }
+
+        val flipBtns = halves.map { it.findViewById<TextView>(R.id.stFlip) }
+        flipBtns.forEach { it.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off) }
+        flipBtns.forEach { btn ->
+            btn.setOnClickListener {
+                flipH = !flipH
+                saveFlipH(flipH)
+                applyAspectToAll()
+                flipBtns.forEach { it.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off) }
+                FileLogger.log("stereo flipH -> $flipH")
+            }
+        }
+
+        val aspectBtns = halves.map { it.findViewById<TextView>(R.id.stAspect) }
+        aspectBtns.forEach { it.text = str(aspectMode.labelRes) }
+        aspectBtns.forEach { btn ->
+            btn.setOnClickListener {
+                aspectMode = AspectMode.values()[(aspectMode.ordinal + 1) % AspectMode.values().size]
+                saveAspectMode(aspectMode)
+                applyAspectToAll()
+                aspectBtns.forEach { it.text = str(aspectMode.labelRes) }
+                FileLogger.log("stereo aspect -> $aspectMode")
+            }
+        }
+
+        val followBtns = halves.map { it.findViewById<TextView>(R.id.stFollow) }
+        followBtns.forEach { it.text = str(if (SpatialControls.isHeadFollowEnabled(ctx)) R.string.head_follow_on else R.string.head_follow_off) }
+        followBtns.forEach { btn ->
+            btn.setOnClickListener {
+                val next = !SpatialControls.isHeadFollowEnabled(requireContext())
+                SpatialControls.setHeadFollowEnabled(requireContext(), next)
+                followBtns.forEach { it.text = str(if (next) R.string.head_follow_on else R.string.head_follow_off) }
+                FileLogger.log("stereo headFollow -> $next")
+            }
+        }
+
+        val smoothBtns = halves.map { it.findViewById<TextView>(R.id.stSmoothing) }
+        smoothBtns.forEach { it.text = str(if (SpatialControls.isSmoothingEnabled(ctx)) R.string.smoothing_on else R.string.smoothing_off) }
+        smoothBtns.forEach { btn ->
+            btn.setOnClickListener {
+                val next = !SpatialControls.isSmoothingEnabled(requireContext())
+                SpatialControls.setSmoothingEnabled(requireContext(), next)
+                smoothBtns.forEach { it.text = str(if (next) R.string.smoothing_on else R.string.smoothing_off) }
+                FileLogger.log("stereo smoothing -> $next")
+            }
+        }
+
+        val passthroughBtns = halves.map { it.findViewById<TextView>(R.id.stPassthrough) }
+        passthroughBtns.forEach { it.text = str(if (SpatialControls.isPassthroughEnabled(ctx)) R.string.passthrough_on else R.string.passthrough_off) }
+        passthroughBtns.forEach { btn ->
+            btn.setOnClickListener {
+                val next = !SpatialControls.isPassthroughEnabled(requireContext())
+                SpatialControls.setPassthroughEnabled(requireContext(), next)
+                passthroughBtns.forEach { it.text = str(if (next) R.string.passthrough_on else R.string.passthrough_off) }
+                FileLogger.log("stereo passthrough -> $next")
+            }
+        }
+
+        halves.forEach { half ->
+            half.findViewById<TextView>(R.id.stSwap).setOnClickListener { performSwap() }
+        }
     }
 
     /** FileLogger invokes this from arbitrary threads; marshal to the UI thread. */
@@ -619,6 +800,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         SpatialControls.setHeadFollowEnabled(ctx, SpatialControls.DEFAULT_HEAD_FOLLOW)
         SpatialControls.setSmoothingEnabled(ctx, SpatialControls.DEFAULT_SMOOTHING)
         SpatialControls.setPassthroughEnabled(ctx, SpatialControls.DEFAULT_PASSTHROUGH)
+        SpatialControls.setStereoEnabled(ctx, SpatialControls.DEFAULT_STEREO)
         SpatialControls.setPanelDistance(ctx, SpatialControls.DEFAULT_PANEL_DISTANCE)
         SpatialControls.setPanelScale(ctx, SpatialControls.DEFAULT_PANEL_SCALE)
         SpatialControls.setPanelCurve(ctx, SpatialControls.DEFAULT_PANEL_CURVE)
@@ -721,7 +903,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private fun applyGap(pct: Int) {
         val spacer = gapSpacer ?: return
         val lp = spacer.layoutParams as LinearLayout.LayoutParams
-        lp.weight = pct / 100f * MAX_GAP_WEIGHT
+        // In stereo the gap shifts each eye's image outward (a divergence/alignment trim), so a
+        // much smaller range is both sufficient and safer for eye comfort.
+        lp.weight = pct / 100f * (if (stereoOn) MAX_GAP_WEIGHT_STEREO else MAX_GAP_WEIGHT)
         spacer.layoutParams = lp
     }
 
@@ -756,6 +940,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         settingsScroll = null
         settingsScrim = null
         settingsToggle = null
+        stereoOverlay = null
+        stereoGearRow = null
+        stereoHalves = emptyList()
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroyView()
     }
@@ -768,11 +955,19 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     // slider, and A/center clicks. Navigation keys are only intercepted while the controls hold
     // focus, so normal pointer/hand-ray use of the camera view is unaffected.
 
-    fun isSettingsVisible(): Boolean = settingsScroll?.visibility == View.VISIBLE
+    fun isSettingsVisible(): Boolean =
+        if (stereoOn) stereoOverlay?.visibility == View.VISIBLE
+        else settingsScroll?.visibility == View.VISIBLE
 
     fun toggleSettings() = setSettingsVisible(!isSettingsVisible())
 
     private fun setSettingsVisible(show: Boolean) {
+        if (stereoOn) {
+            stereoOverlay?.visibility = if (show) View.VISIBLE else View.GONE
+            FileLogger.log("stereo settings ${if (show) "shown" else "hidden"}")
+            if (!show) view?.findFocus()?.clearFocus()
+            return
+        }
         val scroll = settingsScroll ?: return
         scroll.visibility = if (show) View.VISIBLE else View.GONE
         settingsScrim?.visibility = if (show) View.VISIBLE else View.GONE
@@ -783,7 +978,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
     /** Ordered list of focusable controls in the row (buttons + sliders), left to right. */
     private fun barItems(): List<View> {
-        val list = settingsList ?: return emptyList()
+        // In stereo, controller navigation runs on the LEFT copy of the duplicated column; the
+        // change handlers mirror everything onto the right copy.
+        val list = (if (stereoOn) stereoHalves.firstOrNull() else settingsList) ?: return emptyList()
         val out = ArrayList<View>()
         collectFocusables(list, out)
         return out
@@ -805,6 +1002,16 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     fun handleControllerKey(keyCode: Int): Boolean {
+        // In stereo, B/BACK with the settings closed drops back to mono (recreating the panel
+        // with the full UI). MENU/Y and the rest fall through to the shared settings handling,
+        // which operates on the duplicated per-eye column via the stereo-aware helpers.
+        if (stereoOn && !isSettingsVisible() &&
+            (keyCode == KeyEvent.KEYCODE_BUTTON_B || keyCode == KeyEvent.KEYCODE_BACK)
+        ) {
+            FileLogger.log("controller exit stereo -> mono (panel will recreate)")
+            SpatialControls.setStereoEnabled(requireContext(), false)
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BUTTON_Y) {
             if (isSettingsVisible()) {
                 setSettingsVisible(false)
@@ -871,13 +1078,23 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         // Programmatic setProgress doesn't fire fromUser, so commit the persisted value directly.
         when (sb.id) {
             R.id.curveSlider -> SpatialControls.setPanelCurve(requireContext(), sb.progress / 100f)
-            R.id.scaleSlider -> SpatialControls.setPanelScale(requireContext(), progressToScale(sb.progress))
-            R.id.gapSlider -> {
+            R.id.scaleSlider, R.id.stScaleSlider ->
+                SpatialControls.setPanelScale(requireContext(), progressToScale(sb.progress))
+            R.id.gapSlider, R.id.stGapSlider -> {
                 applyGap(sb.progress)
                 saveGapPct(sb.progress)
             }
         }
+        mirrorStereoSlider(sb)
         return true
+    }
+
+    /** Copies a stereo slider's progress to its twin in the other eye's column. */
+    private fun mirrorStereoSlider(sb: SeekBar) {
+        if (!stereoOn) return
+        stereoHalves.forEach { half ->
+            half.findViewById<SeekBar>(sb.id)?.takeIf { it !== sb }?.progress = sb.progress
+        }
     }
 
     companion object {
@@ -892,6 +1109,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREF_FLIP_H = "flip_horizontal"
         private const val PREF_GAP_PCT = "pane_gap_pct"
         private const val MAX_GAP_WEIGHT = 2f         // gap slider at 100% = gap takes half the row
+        private const val MAX_GAP_WEIGHT_STEREO = 0.5f // stereo: gap is a divergence trim, keep small
         private const val SWAP_REOPEN_DELAY_MS = 300L
         private const val OPEN_RETRY_BASE_MS = 600L   // retry delay per attempt (multiplied by attempt#)
         private const val MAX_REOPEN_ATTEMPTS = 3

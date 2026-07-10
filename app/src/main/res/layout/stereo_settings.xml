@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compact settings column shown in stereo mode. Included ONCE PER HALF of the surface at the
+     same position within each half, so each eye sees an identical copy and fuses them into a
+     single floating menu. The fragment keeps the two copies' state in sync. Curve is intentionally
+     absent — stereo is flat-quad only (see ImmersiveActivity.applyPanelCurve). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="220dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView android:id="@+id/stRotation" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/rotation_label" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <TextView android:id="@+id/stFlip" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/flip_h_off" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <TextView android:id="@+id/stAspect" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/aspect_stretch" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <TextView android:id="@+id/stFollow" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/head_follow_on" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <TextView android:id="@+id/stSmoothing" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/smoothing_off" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <TextView android:id="@+id/stPassthrough" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/passthrough_on" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
+        <TextView android:id="@+id/stScaleLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/scale_label" android:textColor="@android:color/white" android:textSize="12sp" />
+        <SeekBar android:id="@+id/stScaleSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
+        <TextView android:id="@+id/stGapLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/gap_label" android:textColor="@android:color/white" android:textSize="12sp" />
+        <SeekBar android:id="@+id/stGapSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+    </LinearLayout>
+
+    <TextView android:id="@+id/stSwap" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />
+</LinearLayout>

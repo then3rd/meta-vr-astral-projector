@@ -3,6 +3,7 @@ package com.compuglobal.astralprojector
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.widget.Toast
@@ -107,5 +108,30 @@ class MainActivity : AppCompatActivity() {
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         if (cameraFragment()?.handleControllerMotion(event) == true) return true
         return super.onGenericMotionEvent(event)
+    }
+
+    /**
+     * In stereo (LeftRight) each eye sees one half of the surface stretched across the full
+     * panel, but the SDK's panel input pipeline is stereo-unaware: it maps the ray hit across
+     * the FULL surface width (0.13.1 bytecode: PanelShape passes StereoMode only to the
+     * compositor layers; PanelInputListener never reads it). A tap therefore lands at twice the
+     * horizontal surface position of what the user is aiming at. Halving x sends every pointer
+     * event to the left half at the visually-corresponding spot — which is why the duplicated
+     * stereo UI treats the left copy as the interactive one.
+     */
+    private fun remapStereoPointer(ev: MotionEvent) {
+        if (SpatialControls.isStereoEnabled(this)) ev.setLocation(ev.x * 0.5f, ev.y)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        remapStereoPointer(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        // Pointer-class only: hover moves from the panel cursor need the same remap as taps,
+        // but joystick events carry axis values that must not be rescaled.
+        if (ev.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) remapStereoPointer(ev)
+        return super.dispatchGenericMotionEvent(ev)
     }
 }

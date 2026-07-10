@@ -12,11 +12,13 @@ object SpatialControls {
     const val KEY_PANEL_SCALE = "panel_scale"
     const val KEY_PANEL_CURVE = "panel_curve"
     const val KEY_PASSTHROUGH = "passthrough_enabled"
+    const val KEY_STEREO = "stereo_enabled"
     private const val KEY_PANEL_DISTANCE = "panel_distance_m"
 
     const val DEFAULT_HEAD_FOLLOW = true
     const val DEFAULT_SMOOTHING = true
     const val DEFAULT_PASSTHROUGH = true
+    const val DEFAULT_STEREO = false
 
     const val DEFAULT_PANEL_DISTANCE = 2.0f
     private const val MIN_PANEL_DISTANCE = 0.5f
@@ -24,6 +26,8 @@ object SpatialControls {
 
     /** Panel size multiplier applied to the base panel dimensions. */
     const val DEFAULT_PANEL_SCALE = 1.0f
+    /** Scale entering stereo defaults to (each eye sees only half the surface, so it wants to be larger). */
+    const val DEFAULT_STEREO_SCALE = 1.5f
     const val MIN_PANEL_SCALE = 0.5f
     const val MAX_PANEL_SCALE = 2.5f
 
@@ -72,6 +76,13 @@ object SpatialControls {
 
     fun setPassthroughEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_PASSTHROUGH, enabled).apply()
+    }
+
+    fun isStereoEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_STEREO, DEFAULT_STEREO)
+
+    fun setStereoEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_STEREO, enabled).apply()
     }
 
     fun getPanelDistance(context: Context): Float =

@@ -2,6 +2,8 @@ package com.compuglobal.astralprojector
 
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import com.meta.spatial.animation.PanelAnimationFeature
 import com.meta.spatial.animation.PanelQuadCylinderAnimation
 import com.meta.spatial.animation.PanelQuadCylinderAnimationType
@@ -13,6 +15,7 @@ import com.meta.spatial.core.SpatialFeature
 import com.meta.spatial.core.SpatialSDKExperimentalAPI
 import com.meta.spatial.core.Vector3
 import com.meta.spatial.runtime.ReferenceSpace
+import com.meta.spatial.runtime.StereoMode
 import com.meta.spatial.toolkit.AppSystemActivity
 import com.meta.spatial.toolkit.Panel
 import com.meta.spatial.toolkit.PanelRegistration
@@ -37,6 +40,8 @@ import kotlin.math.max
 class ImmersiveActivity : AppSystemActivity() {
 
     private var panelEntity: Entity? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Read live by HeadFollowSystem every frame; updated by the shared-prefs listener so the
     // in-panel controls (MainActivity) take effect immediately without polling SharedPreferences.
@@ -112,14 +117,25 @@ class ImmersiveActivity : AppSystemActivity() {
             // config block is PanelConfigOptions.() -> Unit — `this` = the options object.
             // Use the default (append) ordering so these explicit dimensions win over the SDK's
             // default sizing (which would otherwise shrink the panel via fractionOfScreen).
-            width = BASE_WIDTH_M
+            // Re-evaluated on every panel (re)creation: config modifiers are re-applied each time
+            // panelCreator runs, so recreatePanel() picks up the current stereo preference here.
+            val stereo = SpatialControls.isStereoEnabled(this@ImmersiveActivity)
+            // In stereo the compositor shows only one half of the surface to each eye, so the
+            // quad's physical size matches the PER-EYE aspect (960x1160 px half -> ~1.2x1.45 m).
+            width = if (stereo) STEREO_WIDTH_M else BASE_WIDTH_M
             height = BASE_HEIGHT_M
             layoutWidthInPx = PANEL_PX_WIDTH
             layoutHeightInPx = PANEL_PX_HEIGHT
+            // Left half of the surface -> left eye, right half -> right eye: the fragment's
+            // side-by-side panes become a true binocular view.
+            stereoMode = if (stereo) StereoMode.LeftRight else StereoMode.None
             // Alpha-blend the panel against the scene so transparent UI pixels (the settings
             // strip and the gap between the panes) show passthrough instead of opaque black.
             // Requires the hosted activity's window/views to actually be transparent too
             // (Theme.AstralProjector + activity_main have no opaque background).
+            // Also on in stereo so the per-eye settings float over passthrough like the mono
+            // menu: the scene-texture path this forces does support per-eye sampling
+            // (SceneMaterial.setStereoMode / nativeSetStereoParams in the 0.13.1 bytecode).
             enableTransparent = true
         }
     )
@@ -137,19 +153,43 @@ class ImmersiveActivity : AppSystemActivity() {
         // of a panel pointer, so buttons can't be clicked.
         systemManager.tryFindSystem<LocomotionSystem>()?.enableLocomotion(false)
 
-        panelEntity = Entity.createNonNetworked(
-            Transform(Pose(Vector3(0f, 0f, -panelDistance), Quaternion(0f, 0f, 0f, 1f))),
-            Panel(PANEL_ID),
-        )
-
-        // Apply the user's saved scale/curve to the freshly-created panel.
-        applyPanelScale()
-        applyPanelCurve()
+        createPanelEntity()
 
         FileLogger.log(
             "ImmersiveActivity: panel ready distance=${panelDistance}m follow=$headFollowEnabled " +
                 "smoothing=$smoothingEnabled passthrough=on"
         )
+    }
+
+    /** Creates the (single) panel entity and applies the user's saved scale/curve to it. */
+    @OptIn(SpatialSDKExperimentalAPI::class)
+    private fun createPanelEntity() {
+        // A fresh panel mesh is always a flat quad — reset the curve tracking so applyPanelCurve
+        // re-applies a saved curve instead of skipping it as already-applied (and so head-follow's
+        // backOffset doesn't compensate for a curvature the new mesh doesn't have).
+        appliedCurve = SpatialControls.DEFAULT_PANEL_CURVE
+        curveRadius = 0f
+
+        panelEntity = Entity.createNonNetworked(
+            Transform(Pose(Vector3(0f, 0f, -panelDistance), Quaternion(0f, 0f, 0f, 1f))),
+            Panel(PANEL_ID),
+        )
+        applyPanelScale()
+        applyPanelCurve()
+    }
+
+    /**
+     * Destroys and recreates the panel entity so the registration's config block re-runs with the
+     * current preferences. Needed for stereo: PanelSceneObject has no stereo-mode setter, so the
+     * only way to switch is a fresh scene object. Destroying the panel also tears down its virtual
+     * display (finishing MainActivity); the new panel relaunches it, and the cameras reconnect via
+     * the same attach/permission flow used on a physical replug. The delay lets the click that
+     * triggered the toggle finish dispatching inside the dying panel first.
+     */
+    private fun recreatePanel() {
+        panelEntity?.destroy()
+        panelEntity = null
+        mainHandler.postDelayed({ createPanelEntity() }, PANEL_RECREATE_DELAY_MS)
     }
 
     /**
@@ -175,6 +215,10 @@ class ImmersiveActivity : AppSystemActivity() {
      */
     private fun applyPanelCurve() {
         val entity = panelEntity ?: return
+        // Stereo is flat-quad only: the cylinder morph would bend each eye's half around the
+        // full panel's axis, breaking the per-eye geometry. The stereo toggle zeroes the curve
+        // pref before recreating the panel; this guard keeps any later write from curving it.
+        if (SpatialControls.isStereoEnabled(this)) return
         val curve = SpatialControls.getPanelCurve(this)
         if (curve == appliedCurve) return
         appliedCurve = curve
@@ -229,11 +273,18 @@ class ImmersiveActivity : AppSystemActivity() {
                 scene.enablePassthrough(on)
                 FileLogger.log("ImmersiveActivity: passthrough -> $on")
             }
+            SpatialControls.KEY_STEREO -> runOnMainThread {
+                val on = SpatialControls.isStereoEnabled(this)
+                if (on) SpatialControls.setPanelCurve(this, 0f)
+                recreatePanel()
+                FileLogger.log("ImmersiveActivity: stereo -> $on (panel recreated)")
+            }
         }
     }
 
     override fun onDestroy() {
         SpatialControls.prefs(this).unregisterOnSharedPreferenceChangeListener(prefListener)
+        mainHandler.removeCallbacksAndMessages(null)
         panelEntity?.destroy()
         super.onDestroy()
     }
@@ -247,6 +298,12 @@ class ImmersiveActivity : AppSystemActivity() {
         private const val BASE_HEIGHT_M = 1.45f
         private const val PANEL_PX_WIDTH = 1920
         private const val PANEL_PX_HEIGHT = 1160
+        // Stereo quad width: each eye sees one 960x1160 half of the surface, so the quad keeps
+        // the per-eye pixel aspect at the same px/m density (1.45 * 960/1160 ≈ 1.2).
+        private const val STEREO_WIDTH_M = 1.2f
+        // Grace period between destroying the old panel and creating the new one, so the toggle
+        // click finishes dispatching inside the dying panel's virtual display first.
+        private const val PANEL_RECREATE_DELAY_MS = 150L
 
         // Quad<->cylinder morph duration. Short: each animation frame rebuilds the panel mesh.
         private const val CURVE_ANIM_MS = 300L
