@@ -11,6 +11,7 @@ object SpatialControls {
     const val KEY_SMOOTHING = "head_follow_smoothing"
     const val KEY_PANEL_SCALE = "panel_scale"
     const val KEY_PANEL_CURVE = "panel_curve"
+    const val KEY_PASSTHROUGH = "passthrough_enabled"
     private const val KEY_PANEL_DISTANCE = "panel_distance_m"
 
     const val DEFAULT_PANEL_DISTANCE = 2.0f
@@ -60,6 +61,13 @@ object SpatialControls {
 
     fun setSmoothingEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SMOOTHING, enabled).apply()
+    }
+
+    fun isPassthroughEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PASSTHROUGH, true)
+
+    fun setPassthroughEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_PASSTHROUGH, enabled).apply()
     }
 
     fun getPanelDistance(context: Context): Float =

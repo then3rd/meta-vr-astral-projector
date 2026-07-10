@@ -109,8 +109,8 @@ class ImmersiveActivity : AppSystemActivity() {
     override fun onSceneReady() {
         super.onSceneReady()
 
-        // Mixed-reality passthrough: show the real world behind the panel.
-        scene.enablePassthrough(true)
+        // Mixed-reality passthrough: show the real world behind the panel (unless disabled).
+        scene.enablePassthrough(SpatialControls.isPassthroughEnabled(this))
         // LOCAL reference space places the panel relative to the user and recenters with them.
         scene.setReferenceSpace(ReferenceSpace.LOCAL)
 
@@ -199,6 +199,11 @@ class ImmersiveActivity : AppSystemActivity() {
             }
             SpatialControls.KEY_PANEL_SCALE -> runOnMainThread { applyPanelScale() }
             SpatialControls.KEY_PANEL_CURVE -> runOnMainThread { applyPanelCurve() }
+            SpatialControls.KEY_PASSTHROUGH -> runOnMainThread {
+                val on = SpatialControls.isPassthroughEnabled(this)
+                scene.enablePassthrough(on)
+                FileLogger.log("ImmersiveActivity: passthrough -> $on")
+            }
         }
     }
 

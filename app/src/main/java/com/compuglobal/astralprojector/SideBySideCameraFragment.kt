@@ -116,6 +116,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     // Settings controls row (toggled by the gear button; hidden by default).
     private var settingsList: ViewGroup? = null
     private var settingsScroll: View? = null
+    private var settingsScrim: View? = null
     private var settingsToggle: TextView? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
@@ -145,6 +146,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         // Gear button toggles the (transparent) controls row, which is hidden by default.
         settingsList = root.findViewById(R.id.settingsList)
         settingsScroll = root.findViewById(R.id.settingsScroll)
+        settingsScrim = root.findViewById(R.id.settingsScrim)
+        settingsScrim?.setOnClickListener { setSettingsVisible(false) }
         val settingsBtn = root.findViewById<TextView>(R.id.settingsToggle)
         settingsToggle = settingsBtn
         settingsBtn.setOnClickListener { toggleSettings() }
@@ -220,6 +223,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             SpatialControls.setSmoothingEnabled(requireContext(), next)
             smoothBtn.text = str(if (next) R.string.smoothing_on else R.string.smoothing_off)
             FileLogger.log("smoothing -> $next")
+        }
+
+        // Passthrough toggle. Persists a preference that ImmersiveActivity observes and applies via
+        // scene.enablePassthrough — turning the mixed-reality background on/off live.
+        val passthroughBtn = root.findViewById<TextView>(R.id.passthroughToggle)
+        val initialPassthrough = SpatialControls.isPassthroughEnabled(requireContext())
+        passthroughBtn.text = str(if (initialPassthrough) R.string.passthrough_on else R.string.passthrough_off)
+        passthroughBtn.setOnClickListener {
+            val next = !SpatialControls.isPassthroughEnabled(requireContext())
+            SpatialControls.setPassthroughEnabled(requireContext(), next)
+            passthroughBtn.text = str(if (next) R.string.passthrough_on else R.string.passthrough_off)
+            FileLogger.log("passthrough -> $next")
         }
 
         // Curve slider: 0..100% maps directly to curve amount 0.0..1.0 (flat -> cylinder).
@@ -645,6 +660,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         flipToggle = null
         settingsList = null
         settingsScroll = null
+        settingsScrim = null
         settingsToggle = null
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroyView()
@@ -665,6 +681,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private fun setSettingsVisible(show: Boolean) {
         val scroll = settingsScroll ?: return
         scroll.visibility = if (show) View.VISIBLE else View.GONE
+        settingsScrim?.visibility = if (show) View.VISIBLE else View.GONE
         settingsToggle?.text = str(if (show) R.string.settings_close else R.string.settings_open)
         FileLogger.log("settings controls ${if (show) "shown" else "hidden"}")
         if (!show) view?.findFocus()?.clearFocus()

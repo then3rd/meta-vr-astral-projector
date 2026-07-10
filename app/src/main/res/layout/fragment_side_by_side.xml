@@ -35,6 +35,10 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Transparent scrim behind the settings column. Only present while settings are open; a tap
+         anywhere outside the column (which sits on top of this) closes the menu. -->
+    <View android:id="@+id/settingsScrim" android:layout_width="match_parent" android:layout_height="match_parent" android:clickable="true" android:focusable="false" android:visibility="gone" />
+
     <!-- Settings controls — a transparent vertical column centered over the video. Hidden by
          default; toggled by the gear button. Scrollable in case it exceeds the height. Items are
          focusable so a Quest controller / gamepad can drive them (see MainActivity input forwarding). -->
@@ -51,6 +55,8 @@
             <TextView android:id="@+id/headFollowToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/head_follow_on" android:textColor="@android:color/white" android:textSize="14sp" />
 
             <TextView android:id="@+id/smoothingToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/smoothing_off" android:textColor="@android:color/white" android:textSize="14sp" />
+
+            <TextView android:id="@+id/passthroughToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/passthrough_on" android:textColor="@android:color/white" android:textSize="14sp" />
 
             <!-- Curve slider column -->
             <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
@@ -70,8 +76,6 @@
 
             <TextView android:id="@+id/swapToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />
 
-            <TextView android:id="@+id/permissionRetry" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/retry_permission" android:textColor="@android:color/white" android:textSize="14sp" />
-
             <TextView android:id="@+id/logToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_show" android:textColor="@android:color/white" android:textSize="14sp" />
         </LinearLayout>
     </ScrollView>
@@ -83,6 +87,8 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingBottom="8dp">
 
             <TextView android:id="@+id/buildTimestamp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="16dp" android:fontFamily="monospace" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:textColor="#DDFFFFFF" android:textSize="11sp" />
+
+            <TextView android:id="@+id/permissionRetry" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="16dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/retry_permission" android:textColor="@android:color/white" android:textSize="14sp" />
 
             <TextView android:id="@+id/logClose" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_hide" android:textColor="@android:color/white" android:textSize="14sp" />
         </LinearLayout>

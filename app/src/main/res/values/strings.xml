@@ -7,10 +7,12 @@
     <string name="status_disconnected">Camera disconnected</string>
     <string name="status_extra">Extra camera ignored\n(only two slots)</string>
     <string name="status_error">Camera error: %1$s\nTry lower resolution if two cameras won\'t co-exist.</string>
-    <string name="log_hide">Hide log</string>
-    <string name="log_show">Show log</string>
+    <string name="log_hide">Hide debug</string>
+    <string name="log_show">Debug</string>
     <string name="build_time_label">Build time: %1$s</string>
     <string name="retry_permission">Retry permission</string>
+    <string name="passthrough_on">Passthrough: On</string>
+    <string name="passthrough_off">Passthrough: Off</string>
     <string name="aspect_stretch">Aspect: Stretch</string>
     <string name="aspect_fit_width">Aspect: H-fit</string>
     <string name="aspect_fit_height">Aspect: V-fit</string>

@@ -45,15 +45,19 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   one is dialed in on-device rather than hard-coded. Note: the raw frames from these cameras are
   already upright and correctly-handed — the default is rotation 0 / flip off (an earlier assumed
   SurfaceTexture V-inversion / UVC mirror did NOT exist; the neutral transform is correct).
-- Settings UI: a transparent **⚙ gear button floats centered in a strip above the video** (top of
-  the panel, over passthrough, separate from the video frame). Tapping it toggles a transparent
-  **vertical column of controls centered over the video** (`settingsScroll`/`settingsList`) holding
-  rotation, flip, aspect, swap, follow, smoothing, curve/scale sliders, retry-permission, log
-  toggle, build timestamp. The column is hidden by default; only the gear shows until opened.
-  Backgrounds are ~35% scrim (`settings_item_bg`) with text drop-shadows so passthrough/video shows
-  behind. The panel (`ImmersiveActivity`) is grown taller than the video (1920x1160 px /
-  2.4x1.45 m vs the 1920x960 video region) so the gear strip sits over passthrough rather than
-  shrinking the video.
+- Settings UI: a transparent **⚙ Settings full-width bar spans the top of the panel** (over
+  passthrough, above/separate from the video frame). Tapping it toggles a transparent **vertical
+  column of controls centered over the video** (`settingsScroll`/`settingsList`) holding rotation,
+  flip, aspect, follow, smoothing, passthrough, curve/scale sliders, swap, and a Debug button. The
+  column is hidden by default; only the bar shows until opened. Backgrounds are ~35% scrim
+  (`settings_item_bg`, grayscale hover/focus/press states — no color) with text drop-shadows so
+  passthrough/video shows behind. A full-screen transparent `settingsScrim` sits behind the column
+  while open so tapping anywhere outside it closes the menu. The panel (`ImmersiveActivity`) is
+  grown taller than the video (1920x1160 px / 2.4x1.45 m vs the 1920x960 video region) so the top
+  bar sits over passthrough rather than shrinking the video.
+- Passthrough toggle: persists `SpatialControls.KEY_PASSTHROUGH` (default on); `ImmersiveActivity`
+  applies it on scene-ready and live via its `prefListener` calling `scene.enablePassthrough(...)`,
+  turning the mixed-reality background on/off without a relaunch.
 - Controller input: `MainActivity.dispatchKeyEvent`/`onGenericMotionEvent` forward to the fragment
   (`handleControllerKey`/`handleControllerMotion`). MENU or Y opens the column (and focuses the
   first item) or hides it if already open; while open and focused, D-pad/stick up-down step through
@@ -63,8 +67,9 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   pointer/hand-ray use is unaffected. Pointer taps remain the guaranteed path; controller support is
   untested on hardware.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
-  log overlay with show/hide toggle, hidden by default, now inside the settings menu), per-slot
-  status overlays, and a "retry permission" button.
+  **Debug** overlay, opened by the "Debug" button in the settings menu, hidden by default). The
+  Debug overlay's header row holds the build timestamp, the **retry-permission** button, and a close
+  button. Also per-slot status overlays.
 - Swap toggle: corrects which physical camera renders left vs right (hub-port-dependent, see Field
   setup) without recabling. Persisted in SharedPreferences. Implemented as an indirection
   (`displayIndexFor`) from logical connection slot -> display pane, **not** by reparenting the
