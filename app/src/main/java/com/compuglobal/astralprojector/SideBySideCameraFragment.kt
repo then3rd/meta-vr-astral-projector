@@ -5,7 +5,10 @@ import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
 import android.os.Handler
 import android.os.Looper
+import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ScrollView
@@ -69,6 +72,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var aspectMode = AspectMode.STRETCH
     private var aspectToggle: TextView? = null
 
+    // Video orientation, user-controlled (persisted). rotationDeg snaps to 0/90/180/270 and
+    // flipH mirrors horizontally. Together they cover all 8 orientations, so the correct one
+    // can always be dialed in on-device without recompiling.
+    private var rotationDeg = 0
+    private var flipH = false
+    private var rotationToggle: TextView? = null
+    private var flipToggle: TextView? = null
+
     // Which display pane (texture/status view) each logical connection slot renders into.
     // Left/right depends on hub port, not on which physical camera unit connected, so this
     // lets the user correct it on-screen. Swapping redirects the already-open camera's render
@@ -84,6 +95,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var dumps = 0
 
+    // Debounce timestamp for thumbstick-driven focus movement in the settings menu.
+    private var lastStickMove = 0L
+
     // Cached application context for resource lookups from lifecycle-independent callbacks.
     private var appCtx: Context? = null
 
@@ -97,6 +111,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var logText: TextView? = null
     private var logScroll: ScrollView? = null
     private val logLines = ArrayDeque<String>()
+
+    // Settings menu overlay (hidden by default; toggled by gear button or controller).
+    private var settingsOverlay: View? = null
+    private var settingsList: ViewGroup? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
@@ -115,7 +133,15 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             val show = logScroll?.visibility != View.VISIBLE
             logScroll?.visibility = if (show) View.VISIBLE else View.GONE
             logToggle.text = str(if (show) R.string.log_hide else R.string.log_show)
+            // The log overlay sits behind the settings menu; close the menu so it's visible.
+            if (show) setSettingsVisible(false)
         }
+
+        // Settings menu: gear button opens the overlay, the close button (and gear again) hides it.
+        settingsOverlay = root.findViewById(R.id.settingsOverlay)
+        settingsList = root.findViewById(R.id.settingsList)
+        root.findViewById<TextView>(R.id.settingsToggle).setOnClickListener { toggleSettings() }
+        root.findViewById<TextView>(R.id.settingsClose).setOnClickListener { setSettingsVisible(false) }
 
         root.findViewById<TextView>(R.id.buildTimestamp).text =
             SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(BuildConfig.BUILD_TIME))
@@ -135,6 +161,33 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         swapped = loadSwapped()
         root.findViewById<TextView>(R.id.swapToggle).setOnClickListener {
             performSwap()
+        }
+
+        // Rotation: cycles 0 -> 90 -> 180 -> 270 (snaps to the four orientations).
+        rotationDeg = loadRotation()
+        val rotationBtn = root.findViewById<TextView>(R.id.rotationToggle)
+        rotationToggle = rotationBtn
+        rotationBtn.text = str(R.string.rotation_label, rotationDeg)
+        rotationBtn.setOnClickListener {
+            rotationDeg = (rotationDeg + 90) % 360
+            FileLogger.log("rotation -> $rotationDeg")
+            saveRotation(rotationDeg)
+            rotationBtn.text = str(R.string.rotation_label, rotationDeg)
+            applyAspectToAll()
+        }
+
+        // Horizontal flip: mirrors the video left/right. Combined with rotation this covers all
+        // eight possible orientations, so the correct one can always be set on-device.
+        flipH = loadFlipH()
+        val flipBtn = root.findViewById<TextView>(R.id.flipToggle)
+        flipToggle = flipBtn
+        flipBtn.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off)
+        flipBtn.setOnClickListener {
+            flipH = !flipH
+            FileLogger.log("flipH -> $flipH")
+            saveFlipH(flipH)
+            flipBtn.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off)
+            applyAspectToAll()
         }
 
         // Head-follow toggle. The fragment lives inside MainActivity (the panel), so it can't
@@ -393,26 +446,64 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         tv.post {
             val viewW = tv.width.toFloat()
             val viewH = tv.height.toFloat()
+            val cx = viewW / 2f
+            val cy = viewH / 2f
             val size = videoSizes[logicalIdx]
             if (viewW <= 0f || viewH <= 0f || size == null || size.width <= 0 || size.height <= 0) {
-                // No flip needed — raw orientation is correct.
-                tv.setTransform(Matrix().apply { setScale(1f, 1f, viewW / 2f, viewH / 2f) })
+                // Size not negotiated yet: apply orientation only, at the stretch-fill baseline.
+                val (a, b) = axisScale(AspectMode.STRETCH, rotationDeg, 1, 1, viewW, viewH)
+                tv.setTransform(orientMatrix(a, b, cx, cy))
                 return@post
             }
-            val videoAr = size.width.toFloat() / size.height
-            val viewAr = viewW / viewH
-            var sx = 1f
-            var sy = 1f
-            when (aspectMode) {
-                AspectMode.STRETCH -> Unit
-                AspectMode.FIT_WIDTH -> sy = viewAr / videoAr
-                AspectMode.FIT_HEIGHT -> sx = videoAr / viewAr
-                AspectMode.FULL_FRAME ->
-                    if (videoAr > viewAr) sy = viewAr / videoAr else sx = videoAr / viewAr
-            }
-            // No flip: raw frames are already in the correct orientation for these cameras.
-            tv.setTransform(Matrix().apply { setScale(sx, sy, viewW / 2f, viewH / 2f) })
+            val (a, b) = axisScale(aspectMode, rotationDeg, size.width, size.height, viewW, viewH)
+            tv.setTransform(orientMatrix(a, b, cx, cy))
         }
+    }
+
+    /**
+     * Builds the display-time transform: negate the x scale for a horizontal flip, then rotate
+     * the (already aspect-scaled) content about the pane center. setScale followed by postRotate
+     * yields Rotate·(FlipH·Scale), i.e. the video's width axis is scaled by [a], its height axis
+     * by [b], mirrored if [flipH], then the whole thing spun to [rotationDeg].
+     */
+    private fun orientMatrix(a: Float, b: Float, cx: Float, cy: Float): Matrix =
+        Matrix().apply {
+            setScale(if (flipH) -a else a, b, cx, cy)
+            if (rotationDeg != 0) postRotate(rotationDeg.toFloat(), cx, cy)
+        }
+
+    /**
+     * Computes the per-axis scale (relative to AUSBC's stretch-to-fill baseline) that renders a
+     * [vw]x[vh] video into a [viewW]x[viewH] pane under the given [mode] and [deg] rotation.
+     *
+     * Works by choosing the on-pane lengths of the video's own width/height axes (tw, th) — kept
+     * in the video's aspect ratio for every mode except STRETCH — accounting for the fact that a
+     * 90/270° rotation swaps which pane dimension each axis spans. Returns (tw/viewW, th/viewH),
+     * which are exactly the setScale factors since the baseline stretches one video axis across
+     * each full pane dimension.
+     */
+    private fun axisScale(
+        mode: AspectMode, deg: Int, vw: Int, vh: Int, viewW: Float, viewH: Float
+    ): Pair<Float, Float> {
+        val vertical = deg == 90 || deg == 270
+        val r = vw.toFloat() / vh          // video aspect ratio (w/h)
+        val tw: Float
+        val th: Float
+        when (mode) {
+            AspectMode.STRETCH -> {
+                tw = if (vertical) viewH else viewW
+                th = if (vertical) viewW else viewH
+            }
+            AspectMode.FIT_WIDTH -> if (!vertical) { tw = viewW; th = viewW / r }
+                                    else { th = viewW; tw = r * viewW }
+            AspectMode.FIT_HEIGHT -> if (!vertical) { th = viewH; tw = r * viewH }
+                                     else { tw = viewH; th = viewH / r }
+            AspectMode.FULL_FRAME -> {
+                th = if (!vertical) minOf(viewH, viewW / r) else minOf(viewW, viewH / r)
+                tw = r * th
+            }
+        }
+        return Pair(tw / viewW, th / viewH)
     }
 
     /** Panel scale (fraction) -> SeekBar progress 0..100 across the allowed scale range. */
@@ -498,6 +589,26 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             .edit().putBoolean(PREF_SWAPPED, value).apply()
     }
 
+    private fun loadRotation(): Int {
+        val deg = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(PREF_ROTATION, 0)
+        return if (deg % 90 == 0) ((deg % 360) + 360) % 360 else 0
+    }
+
+    private fun saveRotation(value: Int) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(PREF_ROTATION, value).apply()
+    }
+
+    private fun loadFlipH(): Boolean =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_FLIP_H, false)
+
+    private fun saveFlipH(value: Boolean) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_FLIP_H, value).apply()
+    }
+
     private fun buildRequest(): CameraRequest =
         CameraRequest.Builder()
             .setPreviewWidth(PREVIEW_WIDTH)
@@ -522,8 +633,104 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         logText = null
         logScroll = null
         aspectToggle = null
+        rotationToggle = null
+        flipToggle = null
+        settingsOverlay = null
+        settingsList = null
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroyView()
+    }
+
+    // --- settings menu + controller input --------------------------------------
+
+    fun isSettingsVisible(): Boolean = settingsOverlay?.visibility == View.VISIBLE
+
+    fun toggleSettings() = setSettingsVisible(!isSettingsVisible())
+
+    private fun setSettingsVisible(show: Boolean) {
+        val overlay = settingsOverlay ?: return
+        overlay.visibility = if (show) View.VISIBLE else View.GONE
+        FileLogger.log("settings menu ${if (show) "opened" else "closed"}")
+        if (show) {
+            // Move focus into the menu so a controller/D-pad can drive it immediately.
+            settingsList?.getChildAt(1)?.let { it.post { it.requestFocus() } }
+        }
+    }
+
+    /**
+     * Handles a controller/gamepad key press (forwarded by [MainActivity]). Returns true if the
+     * event was consumed. The menu toggle works whether or not the menu is open; while the menu
+     * is open, D-pad + confirm/cancel are also intercepted so navigation stays inside it and the
+     * B/BACK button closes it. D-pad/confirm otherwise fall through to Android's focus system.
+     */
+    fun handleControllerKey(keyCode: Int): Boolean {
+        when (keyCode) {
+            // Menu / Y open-or-close the settings overlay from anywhere.
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_BUTTON_Y -> {
+                toggleSettings()
+                return true
+            }
+        }
+        if (!isSettingsVisible()) return false
+        return when (keyCode) {
+            // B / BACK closes the menu instead of leaving the app.
+            KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
+                setSettingsVisible(false)
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> moveFocus(View.FOCUS_UP)
+            KeyEvent.KEYCODE_DPAD_DOWN -> moveFocus(View.FOCUS_DOWN)
+            KeyEvent.KEYCODE_DPAD_LEFT -> adjustFocused(-1) || moveFocus(View.FOCUS_LEFT)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> adjustFocused(+1) || moveFocus(View.FOCUS_RIGHT)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_ENTER -> {
+                view?.findFocus()?.performClick() ?: false
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * Maps a controller thumbstick / hat (forwarded by [MainActivity]) to focus movement inside
+     * the open menu. Debounced so one flick moves focus one step. Returns true if consumed.
+     */
+    fun handleControllerMotion(event: MotionEvent): Boolean {
+        if (!isSettingsVisible()) return false
+        if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
+        val x = event.getAxisValue(MotionEvent.AXIS_X).let {
+            if (it == 0f) event.getAxisValue(MotionEvent.AXIS_HAT_X) else it
+        }
+        val y = event.getAxisValue(MotionEvent.AXIS_Y).let {
+            if (it == 0f) event.getAxisValue(MotionEvent.AXIS_HAT_Y) else it
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastStickMove < STICK_REPEAT_MS) return true
+        val consumed = when {
+            y < -STICK_DEADZONE -> moveFocus(View.FOCUS_UP)
+            y > STICK_DEADZONE -> moveFocus(View.FOCUS_DOWN)
+            x < -STICK_DEADZONE -> adjustFocused(-1) || moveFocus(View.FOCUS_LEFT)
+            x > STICK_DEADZONE -> adjustFocused(+1) || moveFocus(View.FOCUS_RIGHT)
+            else -> false
+        }
+        if (consumed) lastStickMove = now
+        return consumed
+    }
+
+    private fun moveFocus(direction: Int): Boolean {
+        val current = view?.findFocus() ?: settingsList?.getChildAt(1)
+        val next = current?.focusSearch(direction) ?: return false
+        return next.requestFocus(direction)
+    }
+
+    /** Left/right on a focused SeekBar nudges it (and commits); otherwise returns false to fall through. */
+    private fun adjustFocused(delta: Int): Boolean {
+        val sb = view?.findFocus() as? SeekBar ?: return false
+        sb.progress = (sb.progress + delta * SEEKBAR_STEP).coerceIn(0, sb.max)
+        // Programmatic setProgress doesn't fire fromUser, so commit the persisted value directly.
+        when (sb.id) {
+            R.id.curveSlider -> SpatialControls.setPanelCurve(requireContext(), sb.progress / 100f)
+            R.id.scaleSlider -> SpatialControls.setPanelScale(requireContext(), progressToScale(sb.progress))
+        }
+        return true
     }
 
     companion object {
@@ -534,8 +741,15 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREFS_NAME = "camera_eyes"
         private const val PREF_ASPECT_MODE = "aspect_mode"
         private const val PREF_SWAPPED = "panes_swapped"
+        private const val PREF_ROTATION = "rotation_deg"
+        private const val PREF_FLIP_H = "flip_horizontal"
         private const val SWAP_REOPEN_DELAY_MS = 300L
         private const val OPEN_RETRY_BASE_MS = 600L   // retry delay per attempt (multiplied by attempt#)
         private const val MAX_REOPEN_ATTEMPTS = 3
+
+        // Controller/gamepad tuning for the settings menu.
+        private const val STICK_DEADZONE = 0.5f       // stick magnitude before a focus move fires
+        private const val STICK_REPEAT_MS = 250L      // min gap between stick-driven focus moves
+        private const val SEEKBAR_STEP = 5            // progress units per D-pad/stick nudge
     }
 }

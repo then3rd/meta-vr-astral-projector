@@ -3,6 +3,8 @@ package com.compuglobal.astralprojector
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -82,5 +84,28 @@ class MainActivity : AppCompatActivity() {
         supportFragmentManager.beginTransaction()
             .replace(R.id.container, SideBySideCameraFragment())
             .commit()
+    }
+
+    private fun cameraFragment(): SideBySideCameraFragment? =
+        supportFragmentManager.findFragmentById(R.id.container) as? SideBySideCameraFragment
+
+    /**
+     * Route controller/gamepad button presses to the camera fragment so a Quest controller can
+     * open the settings menu and navigate it without the pointer. Only ACTION_DOWN is forwarded;
+     * anything the fragment doesn't consume falls through to normal handling.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            cameraFragment()?.handleControllerKey(event.keyCode) == true
+        ) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    /** Route thumbstick / hat motion to the fragment for menu focus navigation. */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (cameraFragment()?.handleControllerMotion(event) == true) return true
+        return super.onGenericMotionEvent(event)
     }
 }

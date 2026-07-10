@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Background for focusable settings items: highlights when focused (controller/D-pad nav)
+     or pressed, so gamepad navigation is visible. Falls back to the dark scrim otherwise. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#3F6FFF" />
+            <corners android:radius="6dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#3F6FFF" />
+            <corners android:radius="6dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#B3000000" />
+            <corners android:radius="6dp" />
+        </shape>
+    </item>
+</selector>
