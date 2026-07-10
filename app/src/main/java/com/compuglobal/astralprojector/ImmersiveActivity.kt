@@ -2,21 +2,21 @@ package com.compuglobal.astralprojector
 
 import android.content.SharedPreferences
 import android.os.Bundle
+import com.meta.spatial.animation.PanelAnimationFeature
+import com.meta.spatial.animation.PanelQuadCylinderAnimation
+import com.meta.spatial.animation.PanelQuadCylinderAnimationType
+import com.meta.spatial.core.DataModel
 import com.meta.spatial.core.Entity
 import com.meta.spatial.core.Pose
 import com.meta.spatial.core.Quaternion
 import com.meta.spatial.core.SpatialFeature
 import com.meta.spatial.core.SpatialSDKExperimentalAPI
 import com.meta.spatial.core.Vector3
-import com.meta.spatial.runtime.PanelConfigOptions
-import com.meta.spatial.runtime.PanelSceneObject
-import com.meta.spatial.runtime.PanelShapeType
 import com.meta.spatial.runtime.ReferenceSpace
 import com.meta.spatial.toolkit.AppSystemActivity
 import com.meta.spatial.toolkit.Panel
 import com.meta.spatial.toolkit.PanelRegistration
 import com.meta.spatial.toolkit.Scale
-import com.meta.spatial.toolkit.SceneObjectSystem
 import com.meta.spatial.toolkit.Transform
 import com.meta.spatial.vr.LocomotionSystem
 import com.meta.spatial.vr.VRFeature
@@ -44,14 +44,24 @@ class ImmersiveActivity : AppSystemActivity() {
     @Volatile private var smoothingEnabled = false
     @Volatile private var panelDistance = SpatialControls.DEFAULT_PANEL_DISTANCE
 
-    // Curvature currently baked into the panel mesh; reshape only when it actually changes.
+    // Curvature currently applied to the panel; used to pick the right morph animation type
+    // and to skip redundant re-applies.
     private var appliedCurve = SpatialControls.DEFAULT_PANEL_CURVE
+
+    // Cylinder radius currently applied to the panel mesh (0 = flat quad). While curved,
+    // HeadFollowSystem is suspended: the SDK's PanelQuadCylinderAnimator owns the panel Transform
+    // (it offsets the entity by the mesh radius so the visible arc stays in place), and a
+    // per-frame follow would overwrite that compensation.
+    @Volatile private var curveRadius = 0f
 
     // INTERACTION_SDK routes both controller rays AND tracked hands (pinch = click) to panels,
     // so the app is usable without a controller. Requires the oculus.software.handtracking
     // feature + com.oculus.permission.HAND_TRACKING declarations in the manifest.
+    @OptIn(SpatialSDKExperimentalAPI::class)
     override fun registerFeatures(): List<SpatialFeature> = listOf(
         VRFeature(this, inputSystemType = VrInputSystemType.INTERACTION_SDK),
+        // Registers the PanelQuadCylinderAnimation component + system used by applyPanelCurve.
+        PanelAnimationFeature(),
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,7 +78,8 @@ class ImmersiveActivity : AppSystemActivity() {
         systemManager.registerSystem(
             HeadFollowSystem(
                 panelEntity = { panelEntity },
-                isEnabled = { headFollowEnabled },
+                // Suspended while curved — see curveRadius.
+                isEnabled = { headFollowEnabled && curveRadius == 0f },
                 distance = { panelDistance },
                 isSmoothing = { smoothingEnabled },
             )
@@ -136,61 +147,44 @@ class ImmersiveActivity : AppSystemActivity() {
 
     /**
      * Curvature interpolates between a flat quad (0) and a cylinder whose angular extent grows
-     * with the curve amount (smaller cylinder radius = more wrap-around). This is the one change
-     * that genuinely needs [PanelSceneObject.reshape] (mesh rebuild), so the slider only commits
-     * it on release, and any failure inside the future is logged instead of silently swallowed.
+     * with the curve amount (smaller cylinder radius = more wrap-around). Applied via the SDK's
+     * [PanelQuadCylinderAnimation]: its system performs the mesh reshape each animation frame AND
+     * offsets the panel Transform by the radius delta — the cylinder mesh is built around the
+     * cylinder axis, so without that offset the visible arc drifts away from the user (this is
+     * exactly the bug our hand-rolled reshape had).
      */
     private fun applyPanelCurve() {
         val entity = panelEntity ?: return
         val curve = SpatialControls.getPanelCurve(this)
         if (curve == appliedCurve) return
+        appliedCurve = curve
 
-        // Radius from the unscaled width: the Scale component multiplies the whole mesh afterward,
-        // which keeps the wrap-around angle constant regardless of panel size.
-        val config = if (curve <= CURVE_EPSILON) {
-            PanelConfigOptions(
-                width = BASE_WIDTH_M,
-                height = BASE_HEIGHT_M,
-                layoutWidthInPx = PANEL_PX_WIDTH,
-                layoutHeightInPx = PANEL_PX_HEIGHT,
-                panelShapeType = PanelShapeType.QUAD,
-            )
-        } else {
-            // Angular extent (radians) the panel wraps around the cylinder = width / radius, so
-            // radius = width / angle. Larger curve -> larger angle -> smaller radius -> more curved.
-            val angle = curve * MAX_CURVE_ANGLE_RAD
-            val radius = max(BASE_WIDTH_M / angle, MIN_CURVE_RADIUS_M)
-            PanelConfigOptions(
-                width = BASE_WIDTH_M,
-                height = BASE_HEIGHT_M,
-                layoutWidthInPx = PANEL_PX_WIDTH,
-                layoutHeightInPx = PANEL_PX_HEIGHT,
-                panelShapeType = PanelShapeType.CYLINDER,
-                radiusForCylinderOrSphere = radius,
-            )
+        // Angular extent (radians) the panel wraps around the cylinder = width / radius, so
+        // radius = width / angle: larger curve -> larger angle -> smaller radius -> more curved.
+        val meshRadius = if (curve <= CURVE_EPSILON) 0f
+        else max(BASE_WIDTH_M / (curve * MAX_CURVE_ANGLE_RAD), MIN_CURVE_RADIUS_M)
+
+        val oldRadius = curveRadius
+        if (meshRadius == oldRadius) return
+        curveRadius = meshRadius
+
+        val type = when {
+            oldRadius == 0f -> PanelQuadCylinderAnimationType.QUAD_TO_CYLINDER
+            meshRadius == 0f -> PanelQuadCylinderAnimationType.CYLINDER_TO_QUAD
+            else -> PanelQuadCylinderAnimationType.CYLINDER_TO_CYLINDER
         }
-
-        systemManager.findSystem<SceneObjectSystem>()
-            .getSceneObject(entity)
-            ?.whenComplete { sceneObject, err ->
-                // Exceptions inside CompletableFuture callbacks never surface on their own —
-                // log everything so a reshape failure is visible in the on-screen overlay.
-                when {
-                    err != null ->
-                        FileLogger.log("ImmersiveActivity: reshape unavailable: $err")
-                    sceneObject !is PanelSceneObject ->
-                        FileLogger.log("ImmersiveActivity: reshape skipped, sceneObject=$sceneObject")
-                    else -> try {
-                        sceneObject.reshape(config)
-                        appliedCurve = curve
-                        FileLogger.log(
-                            "ImmersiveActivity: reshape curve=$curve shape=${config.panelShapeType}"
-                        )
-                    } catch (t: Throwable) {
-                        FileLogger.log("ImmersiveActivity: reshape FAILED: $t")
-                    }
-                }
-            }
+        entity.setComponent(
+            PanelQuadCylinderAnimation(
+                animationType = type,
+                targetRadius = meshRadius,
+                startTime = DataModel.getLocalDataModelTime(),
+                durationInMs = CURVE_ANIM_MS,
+            )
+        )
+        FileLogger.log(
+            "ImmersiveActivity: curve=$curve -> $type radius=$meshRadius " +
+                "(head-follow ${if (meshRadius > 0f) "suspended while curved" else "resumed"})"
+        )
     }
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -220,6 +214,9 @@ class ImmersiveActivity : AppSystemActivity() {
         private const val BASE_HEIGHT_M = 1.2f
         private const val PANEL_PX_WIDTH = 1920
         private const val PANEL_PX_HEIGHT = 960
+
+        // Quad<->cylinder morph duration. Short: each animation frame rebuilds the panel mesh.
+        private const val CURVE_ANIM_MS = 300L
 
         // Curve <= this is treated as flat (quad) to avoid a near-infinite cylinder radius.
         private const val CURVE_EPSILON = 0.02f

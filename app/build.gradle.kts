@@ -11,7 +11,9 @@ android {
 
     defaultConfig {
         applicationId = "com.compuglobal.astralprojector"
-        minSdk = 24
+        // 28 is required by meta-spatial-sdk-animation; the target hardware (Quest 2, API 29+)
+        // is unaffected, this only drops Android 7/8 phones for the plain 2D activity.
+        minSdk = 28
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -70,6 +72,10 @@ dependencies {
     implementation("com.meta.spatial:meta-spatial-sdk:$metaSpatialSdkVersion")
     implementation("com.meta.spatial:meta-spatial-sdk-toolkit:$metaSpatialSdkVersion")
     implementation("com.meta.spatial:meta-spatial-sdk-vr:$metaSpatialSdkVersion")
+    // Panel quad<->cylinder morphing (PanelAnimationFeature + PanelQuadCylinderAnimation):
+    // the SDK system owns both the mesh reshape and the radius-dependent transform compensation
+    // the cylinder mesh needs (its origin is the cylinder axis, not the visible surface).
+    implementation("com.meta.spatial:meta-spatial-sdk-animation:$metaSpatialSdkVersion")
     // Note: the com.meta.spatial.plugin Gradle plugin (applied above) registers its own KSP
     // processor (ComponentDataProcessor) internally — no explicit ksp() dep needed here.
 }
