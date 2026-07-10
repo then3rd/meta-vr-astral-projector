@@ -14,6 +14,10 @@ object SpatialControls {
     const val KEY_PASSTHROUGH = "passthrough_enabled"
     private const val KEY_PANEL_DISTANCE = "panel_distance_m"
 
+    const val DEFAULT_HEAD_FOLLOW = true
+    const val DEFAULT_SMOOTHING = true
+    const val DEFAULT_PASSTHROUGH = true
+
     const val DEFAULT_PANEL_DISTANCE = 2.0f
     private const val MIN_PANEL_DISTANCE = 0.5f
     private const val MAX_PANEL_DISTANCE = 5.0f
@@ -50,21 +54,21 @@ object SpatialControls {
     }
 
     fun isHeadFollowEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_HEAD_FOLLOW, true)
+        prefs(context).getBoolean(KEY_HEAD_FOLLOW, DEFAULT_HEAD_FOLLOW)
 
     fun setHeadFollowEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_HEAD_FOLLOW, enabled).apply()
     }
 
     fun isSmoothingEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_SMOOTHING, true)
+        prefs(context).getBoolean(KEY_SMOOTHING, DEFAULT_SMOOTHING)
 
     fun setSmoothingEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SMOOTHING, enabled).apply()
     }
 
     fun isPassthroughEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_PASSTHROUGH, true)
+        prefs(context).getBoolean(KEY_PASSTHROUGH, DEFAULT_PASSTHROUGH)
 
     fun setPassthroughEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_PASSTHROUGH, enabled).apply()

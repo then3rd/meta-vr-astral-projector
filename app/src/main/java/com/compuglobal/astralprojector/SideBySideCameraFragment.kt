@@ -155,6 +155,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val settingsBtn = root.findViewById<TextView>(R.id.settingsToggle)
         settingsToggle = settingsBtn
         settingsBtn.setOnClickListener { toggleSettings() }
+        root.findViewById<TextView>(R.id.resetButton).setOnClickListener { resetAllSettings() }
 
         root.findViewById<TextView>(R.id.buildTimestamp).text =
             str(R.string.build_time_label,
@@ -585,6 +586,52 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             val camera = slots[logicalIdx] ?: continue
             reopenOnDisplay(camera, logicalIdx)
         }
+    }
+
+    /**
+     * Restores every setting to its default: the pane prefs this fragment owns (rotation, flip,
+     * aspect, gap, swap) and the shared spatial controls (whose setters fire ImmersiveActivity's
+     * pref listener, re-applying follow/smoothing/passthrough/scale/curve live). Also refreshes
+     * the settings-menu labels and sliders so the UI reflects the restored values.
+     */
+    private fun resetAllSettings() {
+        val root = view ?: return
+        FileLogger.log("reset all settings")
+
+        rotationDeg = 0
+        saveRotation(rotationDeg)
+        rotationToggle?.text = str(R.string.rotation_label, rotationDeg)
+        flipH = false
+        saveFlipH(flipH)
+        flipToggle?.text = str(R.string.flip_h_off)
+        aspectMode = AspectMode.FULL_FRAME
+        saveAspectMode(aspectMode)
+        aspectToggle?.text = str(aspectMode.labelRes)
+        applyAspectToAll()
+        saveGapPct(0)
+        applyGap(0)
+        // Programmatic setProgress updates the sliders' labels via onProgressChanged, but with
+        // fromUser=false it writes no prefs — the setters above/below are the commits.
+        root.findViewById<SeekBar>(R.id.gapSlider)?.progress = 0
+        if (swapped) performSwap()
+
+        val ctx = requireContext()
+        SpatialControls.setHeadFollowEnabled(ctx, SpatialControls.DEFAULT_HEAD_FOLLOW)
+        SpatialControls.setSmoothingEnabled(ctx, SpatialControls.DEFAULT_SMOOTHING)
+        SpatialControls.setPassthroughEnabled(ctx, SpatialControls.DEFAULT_PASSTHROUGH)
+        SpatialControls.setPanelDistance(ctx, SpatialControls.DEFAULT_PANEL_DISTANCE)
+        SpatialControls.setPanelScale(ctx, SpatialControls.DEFAULT_PANEL_SCALE)
+        SpatialControls.setPanelCurve(ctx, SpatialControls.DEFAULT_PANEL_CURVE)
+        root.findViewById<TextView>(R.id.headFollowToggle)?.text =
+            str(if (SpatialControls.DEFAULT_HEAD_FOLLOW) R.string.head_follow_on else R.string.head_follow_off)
+        root.findViewById<TextView>(R.id.smoothingToggle)?.text =
+            str(if (SpatialControls.DEFAULT_SMOOTHING) R.string.smoothing_on else R.string.smoothing_off)
+        root.findViewById<TextView>(R.id.passthroughToggle)?.text =
+            str(if (SpatialControls.DEFAULT_PASSTHROUGH) R.string.passthrough_on else R.string.passthrough_off)
+        root.findViewById<SeekBar>(R.id.scaleSlider)?.progress =
+            scaleToProgress(SpatialControls.DEFAULT_PANEL_SCALE)
+        root.findViewById<SeekBar>(R.id.curveSlider)?.progress =
+            (SpatialControls.DEFAULT_PANEL_CURVE * 100f).toInt()
     }
 
     /**

@@ -22,6 +22,7 @@
     <string name="flip_h_on">Flip H: On</string>
     <string name="flip_h_off">Flip H: Off</string>
     <string name="settings_open">⚙ Settings</string>
+    <string name="reset_label">↺ Reset</string>
     <string name="settings_close">✕ Close</string>
     <string name="head_follow_on">Follow: On</string>
     <string name="head_follow_off">Follow: Off</string>

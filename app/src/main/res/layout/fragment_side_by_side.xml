@@ -6,10 +6,14 @@
          overlays the video (declared later so it draws on top). -->
     <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
 
-        <!-- Top strip: settings button spans the full width, floating over passthrough. -->
+        <!-- Top strip: settings and reset buttons sit side by side, centered as a pair, floating
+             over passthrough. -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingHorizontal="8dp" android:paddingVertical="8dp">
 
-            <TextView android:id="@+id/settingsToggle" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="16sp" />
+            <TextView android:id="@+id/settingsToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="16sp" />
+
+            <!-- Restores every setting (pane prefs + spatial controls) to its default. -->
+            <TextView android:id="@+id/resetButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/reset_label" android:textColor="@android:color/white" android:textSize="16sp" />
         </LinearLayout>
 
         <!-- Camera panes. Each pane is black (so letterbox bars and empty slots stay black) but the
