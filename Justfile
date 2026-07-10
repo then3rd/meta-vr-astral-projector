@@ -109,3 +109,56 @@ clean:
 env:
     @echo "JAVA_HOME=$JAVA_HOME"
     @echo "ANDROID_HOME=$ANDROID_HOME"
+
+# Capture the headset's mirror view (what the lenses show) and pull it to screenshots/ for preview.
+# Wakes the display first: screencap returns pure black while the headset's proximity sensor sleeps.
+screencap name="screencap":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="$ANDROID_HOME/platform-tools/adb"
+    mkdir -p screenshots
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.automation_disable > /dev/null
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.prox_close > /dev/null
+    sleep 4
+    OUT="screenshots/{{name}}-$(date +%Y%m%d-%H%M%S).png"
+    "$ADB" exec-out screencap -p > "$OUT"
+    echo "Saved: $OUT"
+    echo "(If it came out black, the display hadn't woken yet — re-run.)"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open > /dev/null; then
+        xdg-open "$OUT" > /dev/null 2>&1 || true
+    fi
+
+# End-to-end curve test: drags the Curve slider to PCT on the in-headset panel via adb
+# (no controller needed), prints the app's reaction from logcat, then captures a screencap
+# for visual confirmation. Requires the immersive app to be running (just refresh).
+test-curve pct="85":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="$ANDROID_HOME/platform-tools/adb"
+    # Keep the VR session rendering while the headset sits on the desk.
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.automation_disable > /dev/null
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.prox_close > /dev/null
+    # The panel (MainActivity) renders on the app's private virtual display.
+    find_panel_display() {
+        "$ADB" shell dumpsys display \
+            | grep -oE "displayId=[0-9]+, uniqueId='virtual" | grep -oE "[0-9]+" | head -1
+    }
+    DISP="$(find_panel_display)"
+    if [ -z "$DISP" ]; then
+        echo "Panel display not found; launching the immersive app..."
+        "$ADB" shell am start -n com.compuglobal.astralprojector/.ImmersiveActivity > /dev/null
+        sleep 12
+        DISP="$(find_panel_display)"
+    fi
+    [ -n "$DISP" ] || { echo "ERROR: panel virtual display not found — install/run the app first (just refresh)"; exit 1; }
+    echo "Panel is on virtual display $DISP"
+    # Curve slider track spans x=640..1280 at y=163 in the fixed 1920x960 panel layout
+    # (bounds from: adb shell uiautomator dump --display-id $DISP).
+    X=$(( 640 + (1280 - 640) * {{pct}} / 100 ))
+    "$ADB" logcat -c
+    "$ADB" shell input -d "$DISP" swipe 640 163 "$X" 163 600
+    sleep 2
+    echo "--- app reaction (logcat) ---"
+    "$ADB" logcat -d -s AstralProjector:V | grep -iE "curve|cylinder|quad|radius" | tail -5 || true
+    echo "-----------------------------"
+    just screencap "curve-{{pct}}"
