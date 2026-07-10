@@ -102,6 +102,11 @@ class ImmersiveActivity : AppSystemActivity() {
             height = BASE_HEIGHT_M
             layoutWidthInPx = PANEL_PX_WIDTH
             layoutHeightInPx = PANEL_PX_HEIGHT
+            // Alpha-blend the panel against the scene so transparent UI pixels (the settings
+            // strip and the gap between the panes) show passthrough instead of opaque black.
+            // Requires the hosted activity's window/views to actually be transparent too
+            // (Theme.AstralProjector + activity_main have no opaque background).
+            enableTransparent = true
         }
     )
 

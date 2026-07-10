@@ -44,8 +44,10 @@
 
     <!-- Settings controls — a transparent vertical column centered over the video. Hidden by
          default; toggled by the gear button. Scrollable in case it exceeds the height. Items are
-         focusable so a Quest controller / gamepad can drive them (see MainActivity input forwarding). -->
-    <ScrollView android:id="@+id/settingsScroll" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:paddingVertical="8dp" android:scrollbars="none" android:visibility="gone">
+         focusable so a Quest controller / gamepad can drive them (see MainActivity input forwarding).
+         marginTop keeps the column below the full-width Settings/Close bar (~70dp tall): the column
+         is taller than the video, and without the margin its first item covers the bar. -->
+    <ScrollView android:id="@+id/settingsScroll" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:layout_marginTop="80dp" android:paddingVertical="8dp" android:scrollbars="none" android:visibility="gone">
 
         <LinearLayout android:id="@+id/settingsList" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center_horizontal" android:orientation="vertical">
 
@@ -91,11 +93,17 @@
         </LinearLayout>
     </ScrollView>
 
-    <!-- On-screen debug log overlay (covers the video area when shown). A header row with the build
-         time and a close button sits on top so it can always be dismissed. -->
+    <!-- On-screen debug log overlay (covers the video area when shown). The control row (build
+         time / retry / close) sits at the BOTTOM so it never collides with the full-width settings
+         bar at the top of the panel. -->
     <LinearLayout android:id="@+id/logOverlay" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="80dp" android:background="@color/log_scrim" android:orientation="vertical" android:padding="8dp" android:visibility="gone">
 
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingBottom="8dp">
+        <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true" android:scrollbars="vertical">
+
+            <TextView android:id="@+id/logText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textColor="#FFCCFFCC" android:textSize="10sp" android:textIsSelectable="true" />
+        </ScrollView>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:orientation="horizontal" android:paddingTop="8dp">
 
             <TextView android:id="@+id/buildTimestamp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="16dp" android:fontFamily="monospace" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:textColor="#DDFFFFFF" android:textSize="11sp" />
 
@@ -103,11 +111,6 @@
 
             <TextView android:id="@+id/logClose" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="10dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/log_hide" android:textColor="@android:color/white" android:textSize="14sp" />
         </LinearLayout>
-
-        <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true" android:scrollbars="vertical">
-
-            <TextView android:id="@+id/logText" android:layout_width="match_parent" android:layout_height="wrap_content" android:fontFamily="monospace" android:textColor="#FFCCFFCC" android:textSize="10sp" android:textIsSelectable="true" />
-        </ScrollView>
     </LinearLayout>
 
 </FrameLayout>

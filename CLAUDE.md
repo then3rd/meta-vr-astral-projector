@@ -57,6 +57,12 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   while open so tapping anywhere outside it closes the menu. The panel (`ImmersiveActivity`) is
   grown taller than the video (1920x1160 px / 2.4x1.45 m vs the 1920x960 video region) so the top
   bar sits over passthrough rather than shrinking the video.
+- Panel transparency: passthrough-through-the-panel requires ALL of: `enableTransparent = true` in
+  the `PanelRegistration.config` block (without it the panel composites opaque and every
+  transparent pixel renders black), a transparent window (`Theme.AstralProjector` sets
+  `windowBackground` transparent + `windowIsTranslucent`), and no opaque view backgrounds in the
+  hierarchy (`activity_main.xml` container and the fragment root/`videoRow` have none; only the
+  camera panes themselves are black).
 - Passthrough toggle: persists `SpatialControls.KEY_PASSTHROUGH` (default on); `ImmersiveActivity`
   applies it on scene-ready and live via its `prefListener` calling `scene.enablePassthrough(...)`,
   turning the mixed-reality background on/off without a relaunch.
@@ -70,8 +76,9 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   untested on hardware.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
   **Debug** overlay, opened by the "Debug" button in the settings menu, hidden by default). The
-  Debug overlay's header row holds the build timestamp, the **retry-permission** button, and a close
-  button. Also per-slot status overlays.
+  Debug overlay's bottom control row holds the build timestamp, the **retry-permission** button, and
+  a close button (kept at the bottom so the full-width settings bar at the top can't overlap them).
+  Also per-slot status overlays.
 - Swap toggle: corrects which physical camera renders left vs right (hub-port-dependent, see Field
   setup) without recabling. Persisted in SharedPreferences. Implemented as an indirection
   (`displayIndexFor`) from logical connection slot -> display pane, **not** by reparenting the
