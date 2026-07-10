@@ -36,10 +36,34 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   distortion. The fragment corrects at display time via `TextureView.setTransform` scaled around the
   pane center, using the negotiated `camera.getPreviewSize()` (often 640x480, not the requested
   720p). Four modes cycled by an on-screen button, persisted in SharedPreferences: Full frame
-  (default, letterbox), H-fit (fill width), V-fit (fill height), Stretch (legacy fill).
+  (default, letterbox), H-fit (fill width), V-fit (fill height), Stretch (legacy fill). The scale is
+  computed generically (`axisScale`) as the on-pane lengths of the video's width/height axes, so it
+  composes cleanly with rotation.
+- Orientation: rotation (0/90/180/270, cycled button) and a horizontal-flip toggle, both persisted,
+  applied in the same `setTransform` matrix (`orientMatrix`: `setScale` then `postRotate` about the
+  pane center; flip negates the x scale). Rotation×flip covers all 8 orientations, so the correct
+  one is dialed in on-device rather than hard-coded. Note: the raw frames from these cameras are
+  already upright and correctly-handed — the default is rotation 0 / flip off (an earlier assumed
+  SurfaceTexture V-inversion / UVC mirror did NOT exist; the neutral transform is correct).
+- Settings bar: all controls (rotation, flip, aspect, swap, follow, smoothing, curve/scale sliders,
+  retry-permission, log toggle, build timestamp) live in a persistent, horizontally-scrollable bar
+  **below the video** (`settingsList` inside a `HorizontalScrollView`). No show/hide — the earlier
+  corner gear button was hard to reach in-headset. The bar's background is transparent and the
+  buttons are semi-transparent (`settings_item_bg`, ~35% scrim + focus highlight), so Quest
+  passthrough shows behind them. The panel (`ImmersiveActivity`) is grown taller than the video
+  (1920x1160 px / 2.4x1.45 m vs the 1920x960 video region) so this strip sits over passthrough
+  rather than shrinking the video.
+- Controller input: `MainActivity.dispatchKeyEvent`/`onGenericMotionEvent` forward to the fragment
+  (`handleControllerKey`/`handleControllerMotion`). MENU or Y moves focus into (or out of) the bar;
+  once the bar holds focus, D-pad/stick left-right step across items (`moveFocusStep`, geometry-
+  independent so it works in the horizontal row), up-down nudge a focused slider (committing
+  directly, since programmatic `setProgress` doesn't fire `fromUser`), A/DPAD-center clicks, and
+  B/BACK drops focus back to the camera view. Navigation keys are only intercepted while the bar
+  holds focus, so pointer/hand-ray use is unaffected. Pointer taps remain the guaranteed path;
+  controller support is untested on hardware.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
-  log overlay with show/hide toggle, hidden by default), per-slot status overlays, and a "retry
-  permission" button.
+  log overlay with show/hide toggle, hidden by default, now inside the settings menu), per-slot
+  status overlays, and a "retry permission" button.
 - Swap toggle: corrects which physical camera renders left vs right (hub-port-dependent, see Field
   setup) without recabling. Persisted in SharedPreferences. Implemented as an indirection
   (`displayIndexFor`) from logical connection slot -> display pane, **not** by reparenting the

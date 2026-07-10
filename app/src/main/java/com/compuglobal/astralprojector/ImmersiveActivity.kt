@@ -210,10 +210,13 @@ class ImmersiveActivity : AppSystemActivity() {
 
     companion object {
         private const val PANEL_ID = 1
+        // Panel is taller than the video (2.4x1.2 / 1920x960) by an extra strip that hosts the
+        // always-visible settings bar over passthrough. Height grown proportionally so the video
+        // region keeps its ~square-per-pane geometry and pixels stay square (px/m constant).
         private const val BASE_WIDTH_M = 2.4f
-        private const val BASE_HEIGHT_M = 1.2f
+        private const val BASE_HEIGHT_M = 1.45f
         private const val PANEL_PX_WIDTH = 1920
-        private const val PANEL_PX_HEIGHT = 960
+        private const val PANEL_PX_HEIGHT = 1160
 
         // Quad<->cylinder morph duration. Short: each animation frame rebuilds the panel mesh.
         private const val CURVE_ANIM_MS = 300L
