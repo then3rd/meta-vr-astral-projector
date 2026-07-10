@@ -15,6 +15,7 @@ import com.meta.spatial.runtime.ReferenceSpace
 import com.meta.spatial.toolkit.AppSystemActivity
 import com.meta.spatial.toolkit.Panel
 import com.meta.spatial.toolkit.PanelRegistration
+import com.meta.spatial.toolkit.Scale
 import com.meta.spatial.toolkit.SceneObjectSystem
 import com.meta.spatial.toolkit.Transform
 import com.meta.spatial.vr.LocomotionSystem
@@ -43,9 +44,14 @@ class ImmersiveActivity : AppSystemActivity() {
     @Volatile private var smoothingEnabled = false
     @Volatile private var panelDistance = SpatialControls.DEFAULT_PANEL_DISTANCE
 
-    // SIMPLE_CONTROLLER gives a controller ray pointer for interacting with panels.
+    // Curvature currently baked into the panel mesh; reshape only when it actually changes.
+    private var appliedCurve = SpatialControls.DEFAULT_PANEL_CURVE
+
+    // INTERACTION_SDK routes both controller rays AND tracked hands (pinch = click) to panels,
+    // so the app is usable without a controller. Requires the oculus.software.handtracking
+    // feature + com.oculus.permission.HAND_TRACKING declarations in the manifest.
     override fun registerFeatures(): List<SpatialFeature> = listOf(
-        VRFeature(this, inputSystemType = VrInputSystemType.SIMPLE_CONTROLLER),
+        VRFeature(this, inputSystemType = VrInputSystemType.INTERACTION_SDK),
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,7 +113,8 @@ class ImmersiveActivity : AppSystemActivity() {
         )
 
         // Apply the user's saved scale/curve to the freshly-created panel.
-        applyPanelShape()
+        applyPanelScale()
+        applyPanelCurve()
 
         FileLogger.log(
             "ImmersiveActivity: panel ready distance=${panelDistance}m follow=$headFollowEnabled " +
@@ -116,22 +123,34 @@ class ImmersiveActivity : AppSystemActivity() {
     }
 
     /**
-     * Rebuild the panel's mesh to reflect the current scale + curve preferences. Scale multiplies
-     * the base metre dimensions; curve interpolates between a flat quad (0) and a cylinder whose
-     * angular extent grows with the curve amount (smaller cylinder radius = more wrap-around).
+     * Panel size via the entity's [Scale] component — the SDK scales the existing mesh and
+     * compositor layer in place, so it applies live during a slider drag with no mesh rebuild
+     * (rebuilding per progress tick is what made the sliders unresponsive/hard to re-grab).
      */
-    private fun applyPanelShape() {
+    private fun applyPanelScale() {
         val entity = panelEntity ?: return
         val scale = SpatialControls.getPanelScale(this)
+        entity.setComponent(Scale(Vector3(scale, scale, scale)))
+        FileLogger.log("ImmersiveActivity: scale -> $scale")
+    }
+
+    /**
+     * Curvature interpolates between a flat quad (0) and a cylinder whose angular extent grows
+     * with the curve amount (smaller cylinder radius = more wrap-around). This is the one change
+     * that genuinely needs [PanelSceneObject.reshape] (mesh rebuild), so the slider only commits
+     * it on release, and any failure inside the future is logged instead of silently swallowed.
+     */
+    private fun applyPanelCurve() {
+        val entity = panelEntity ?: return
         val curve = SpatialControls.getPanelCurve(this)
+        if (curve == appliedCurve) return
 
-        val width = BASE_WIDTH_M * scale
-        val height = BASE_HEIGHT_M * scale
-
+        // Radius from the unscaled width: the Scale component multiplies the whole mesh afterward,
+        // which keeps the wrap-around angle constant regardless of panel size.
         val config = if (curve <= CURVE_EPSILON) {
             PanelConfigOptions(
-                width = width,
-                height = height,
+                width = BASE_WIDTH_M,
+                height = BASE_HEIGHT_M,
                 layoutWidthInPx = PANEL_PX_WIDTH,
                 layoutHeightInPx = PANEL_PX_HEIGHT,
                 panelShapeType = PanelShapeType.QUAD,
@@ -140,10 +159,10 @@ class ImmersiveActivity : AppSystemActivity() {
             // Angular extent (radians) the panel wraps around the cylinder = width / radius, so
             // radius = width / angle. Larger curve -> larger angle -> smaller radius -> more curved.
             val angle = curve * MAX_CURVE_ANGLE_RAD
-            val radius = max(width / angle, MIN_CURVE_RADIUS_M)
+            val radius = max(BASE_WIDTH_M / angle, MIN_CURVE_RADIUS_M)
             PanelConfigOptions(
-                width = width,
-                height = height,
+                width = BASE_WIDTH_M,
+                height = BASE_HEIGHT_M,
                 layoutWidthInPx = PANEL_PX_WIDTH,
                 layoutHeightInPx = PANEL_PX_HEIGHT,
                 panelShapeType = PanelShapeType.CYLINDER,
@@ -153,13 +172,23 @@ class ImmersiveActivity : AppSystemActivity() {
 
         systemManager.findSystem<SceneObjectSystem>()
             .getSceneObject(entity)
-            ?.thenAccept { sceneObject ->
-                if (sceneObject is PanelSceneObject) {
-                    sceneObject.reshape(config)
-                    FileLogger.log(
-                        "ImmersiveActivity: reshape scale=$scale curve=$curve " +
-                            "size=${width}x${height}m shape=${config.panelShapeType}"
-                    )
+            ?.whenComplete { sceneObject, err ->
+                // Exceptions inside CompletableFuture callbacks never surface on their own —
+                // log everything so a reshape failure is visible in the on-screen overlay.
+                when {
+                    err != null ->
+                        FileLogger.log("ImmersiveActivity: reshape unavailable: $err")
+                    sceneObject !is PanelSceneObject ->
+                        FileLogger.log("ImmersiveActivity: reshape skipped, sceneObject=$sceneObject")
+                    else -> try {
+                        sceneObject.reshape(config)
+                        appliedCurve = curve
+                        FileLogger.log(
+                            "ImmersiveActivity: reshape curve=$curve shape=${config.panelShapeType}"
+                        )
+                    } catch (t: Throwable) {
+                        FileLogger.log("ImmersiveActivity: reshape FAILED: $t")
+                    }
                 }
             }
     }
@@ -174,8 +203,8 @@ class ImmersiveActivity : AppSystemActivity() {
                 smoothingEnabled = SpatialControls.isSmoothingEnabled(this)
                 FileLogger.log("ImmersiveActivity: smoothing -> $smoothingEnabled")
             }
-            SpatialControls.KEY_PANEL_SCALE, SpatialControls.KEY_PANEL_CURVE ->
-                runOnMainThread { applyPanelShape() }
+            SpatialControls.KEY_PANEL_SCALE -> runOnMainThread { applyPanelScale() }
+            SpatialControls.KEY_PANEL_CURVE -> runOnMainThread { applyPanelCurve() }
         }
     }
 

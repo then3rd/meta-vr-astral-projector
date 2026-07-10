@@ -83,8 +83,15 @@ install-debug:
 run-debug:
     "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.compuglobal.astralprojector -c android.intent.category.LAUNCHER 1
 
-# Build install and run
-refresh: build-debug install-debug run-debug
+# Grant required permissions (must re-run after every fresh install)
+# horizonos.permission.USB_CAMERA cannot be granted via runtime dialog on Horizon OS —
+# ADB is the only way for a sideloaded app.
+grant-permissions:
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.CAMERA
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector horizonos.permission.USB_CAMERA
+
+# Build, install, grant permissions, and run
+refresh: build-debug install-debug grant-permissions run-debug
 
 # List connected Android devices
 devices:

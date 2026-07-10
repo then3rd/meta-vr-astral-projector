@@ -165,10 +165,15 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         curveSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
                 curveLabel.text = str(R.string.curve_label, progress)
-                if (fromUser) SpatialControls.setPanelCurve(requireContext(), progress / 100f)
             }
             override fun onStartTrackingTouch(sb: SeekBar) = Unit
-            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+            // Curvature is applied via a panel mesh rebuild (reshape) — doing that on every
+            // progress tick tears down the surface the pointer ray is hit-testing against
+            // mid-drag, so only commit once the drag ends.
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                SpatialControls.setPanelCurve(requireContext(), sb.progress / 100f)
+                FileLogger.log("curve -> ${sb.progress}%")
+            }
         })
 
         // Scale slider: 0..100% maps to panel scale MIN_PANEL_SCALE..MAX_PANEL_SCALE.
