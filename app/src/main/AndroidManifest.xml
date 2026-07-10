@@ -20,6 +20,10 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <!-- Passthrough: lets the app show the real world behind the camera panel (mixed reality). -->
     <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
+    <!-- Boundaryless: disables the Guardian boundary while this app runs, so walking around
+         doesn't trigger the "redraw your boundary" interruption. Allowed because the app is
+         passthrough-based (user can see the real world). Ignored on OS versions without it. -->
+    <uses-feature android:name="com.oculus.feature.BOUNDARYLESS_APP" android:required="false" />
     <!-- Hand tracking: with VrInputSystemType.INTERACTION_SDK the panel can be used without a
          controller (hand ray + pinch to click/drag). Normal permission — declaring it is enough,
          no runtime request; hands still work only if enabled in the headset's system settings. -->
