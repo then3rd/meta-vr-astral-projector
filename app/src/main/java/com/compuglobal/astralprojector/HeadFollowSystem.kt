@@ -18,15 +18,24 @@ import com.meta.spatial.toolkit.Transform
  *
  * When [isSmoothing] is on, the panel eases toward the target pose each frame instead of snapping
  * to it, so small/quick head movements don't feel rigidly glued to the face.
+ *
+ * [backOffset] supports curved (cylinder) panels: their entity origin is the cylinder AXIS, with
+ * the visible arc sitting `radius` in front of it along the entity's +Z (verified in the SDK's
+ * PanelQuadCylinderAnimator bytecode — it shifts the Transform back by the radius so the arc stays
+ * put when morphing). We therefore track/smooth the pose of the visible SURFACE (kept [distance]
+ * in front of the head) and place the entity [backOffset] metres behind it. Smoothing in surface
+ * space matters: the axis can sit tens of metres behind a nearly-flat arc, where independently
+ * interpolated position/rotation would swing the arc metres sideways.
  */
 class HeadFollowSystem(
     private val panelEntity: () -> com.meta.spatial.core.Entity?,
     private val isEnabled: () -> Boolean,
     private val distance: () -> Float,
     private val isSmoothing: () -> Boolean,
+    private val backOffset: () -> Float,
 ) : SystemBase() {
 
-    // Last pose we placed the panel at, used as the interpolation start when smoothing.
+    // Last pose of the panel's visible surface, used as the interpolation start when smoothing.
     private var currentPose: Pose? = null
 
     override fun execute() {
@@ -67,7 +76,10 @@ class HeadFollowSystem(
         }
 
         currentPose = pose
-        entity.setComponent(Transform(pose))
+        // For a curved panel, step from the surface pose back to the entity origin (cylinder
+        // axis). Flat panels have backOffset 0, leaving the pose untouched.
+        val entityT = pose.t - (pose.q * Vector3(0f, 0f, backOffset()))
+        entity.setComponent(Transform(Pose(entityT, pose.q)))
     }
 
     private companion object {

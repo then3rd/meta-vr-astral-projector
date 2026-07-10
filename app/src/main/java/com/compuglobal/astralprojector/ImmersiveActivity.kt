@@ -48,11 +48,21 @@ class ImmersiveActivity : AppSystemActivity() {
     // and to skip redundant re-applies.
     private var appliedCurve = SpatialControls.DEFAULT_PANEL_CURVE
 
-    // Cylinder radius currently applied to the panel mesh (0 = flat quad). While curved,
-    // HeadFollowSystem is suspended: the SDK's PanelQuadCylinderAnimator owns the panel Transform
-    // (it offsets the entity by the mesh radius so the visible arc stays in place), and a
-    // per-frame follow would overwrite that compensation.
+    // Cylinder radius currently applied to the panel mesh (0 = flat quad). A curved panel's
+    // entity origin is the cylinder AXIS with the visible arc `radius` in front of it, so
+    // HeadFollowSystem places the entity backOffset = curveRadius * panelScale behind the
+    // surface pose (the Scale component scales the mesh, and with it the world-space offset).
     @Volatile private var curveRadius = 0f
+
+    // Scale currently applied to the panel entity; feeds the backOffset above.
+    @Volatile private var panelScale = SpatialControls.DEFAULT_PANEL_SCALE
+
+    // DataModel time (ms, same clock the animator uses) until which head-follow stays suspended:
+    // during a quad<->cylinder morph the SDK's PanelQuadCylinderAnimator owns the panel Transform
+    // (it offsets the entity incrementally as the radius animates), and a per-frame follow would
+    // fight those increments. Once the morph completes the animator never touches the Transform
+    // again (verified in the AAR bytecode), so follow can resume with the backOffset compensation.
+    @Volatile private var followSuspendedUntil = 0L
 
     // INTERACTION_SDK routes both controller rays AND tracked hands (pinch = click) to panels,
     // so the app is usable without a controller. Requires the oculus.software.handtracking
@@ -78,10 +88,14 @@ class ImmersiveActivity : AppSystemActivity() {
         systemManager.registerSystem(
             HeadFollowSystem(
                 panelEntity = { panelEntity },
-                // Suspended while curved — see curveRadius.
-                isEnabled = { headFollowEnabled && curveRadius == 0f },
+                // Paused only while a curve morph animation is running — see followSuspendedUntil.
+                isEnabled = {
+                    headFollowEnabled &&
+                        DataModel.getLocalDataModelTime() >= followSuspendedUntil
+                },
                 distance = { panelDistance },
                 isSmoothing = { smoothingEnabled },
+                backOffset = { curveRadius * panelScale },
             )
         )
 
@@ -146,6 +160,7 @@ class ImmersiveActivity : AppSystemActivity() {
     private fun applyPanelScale() {
         val entity = panelEntity ?: return
         val scale = SpatialControls.getPanelScale(this)
+        panelScale = scale
         entity.setComponent(Scale(Vector3(scale, scale, scale)))
         FileLogger.log("ImmersiveActivity: scale -> $scale")
     }
@@ -173,6 +188,11 @@ class ImmersiveActivity : AppSystemActivity() {
         if (meshRadius == oldRadius) return
         curveRadius = meshRadius
 
+        val startTime = DataModel.getLocalDataModelTime()
+        // Hand the Transform to the animator for the morph (plus a margin: the animator does its
+        // completion work on the first frame past the duration), then follow takes back over.
+        followSuspendedUntil = startTime + CURVE_ANIM_MS + CURVE_ANIM_MARGIN_MS
+
         val type = when {
             oldRadius == 0f -> PanelQuadCylinderAnimationType.QUAD_TO_CYLINDER
             meshRadius == 0f -> PanelQuadCylinderAnimationType.CYLINDER_TO_QUAD
@@ -182,13 +202,13 @@ class ImmersiveActivity : AppSystemActivity() {
             PanelQuadCylinderAnimation(
                 animationType = type,
                 targetRadius = meshRadius,
-                startTime = DataModel.getLocalDataModelTime(),
+                startTime = startTime,
                 durationInMs = CURVE_ANIM_MS,
             )
         )
         FileLogger.log(
             "ImmersiveActivity: curve=$curve -> $type radius=$meshRadius " +
-                "(head-follow ${if (meshRadius > 0f) "suspended while curved" else "resumed"})"
+                "(head-follow paused for morph, resumes at $followSuspendedUntil)"
         )
     }
 
@@ -230,6 +250,9 @@ class ImmersiveActivity : AppSystemActivity() {
 
         // Quad<->cylinder morph duration. Short: each animation frame rebuilds the panel mesh.
         private const val CURVE_ANIM_MS = 300L
+        // Extra head-follow suspension past the morph end: the animator finalizes (cylinder->quad
+        // reshape + transform restore) on its first frame AFTER the duration elapses.
+        private const val CURVE_ANIM_MARGIN_MS = 100L
 
         // Curve <= this is treated as flat (quad) to avoid a near-infinite cylinder radius.
         private const val CURVE_EPSILON = 0.02f
