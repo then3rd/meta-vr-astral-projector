@@ -12,21 +12,24 @@
             <TextView android:id="@+id/settingsToggle" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/settings_open" android:textColor="@android:color/white" android:textSize="16sp" />
         </LinearLayout>
 
-        <!-- Camera panes (black so letterbox bars and empty slots stay black). -->
-        <LinearLayout android:id="@+id/videoRow" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:background="@android:color/black" android:orientation="horizontal">
+        <!-- Camera panes. Each pane is black (so letterbox bars and empty slots stay black) but the
+             row itself is transparent: the adjustable gap between the panes shows passthrough. -->
+        <LinearLayout android:id="@+id/videoRow" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
 
             <!-- LEFT camera slot -->
-            <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1">
+            <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:background="@android:color/black">
 
                 <com.jiangdg.ausbc.widget.AspectRatioTextureView android:id="@+id/textureLeft" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="center" />
 
                 <TextView android:id="@+id/statusLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:background="@color/status_scrim" android:paddingHorizontal="16dp" android:paddingVertical="10dp" android:text="@string/status_waiting" android:textColor="@android:color/white" android:textSize="16sp" />
             </FrameLayout>
 
-            <View android:layout_width="2dp" android:layout_height="match_parent" android:background="@color/divider" />
+            <!-- Transparent spacer between the panes; its weight (set from the Gap slider) sizes
+                 the gap, through which passthrough is visible. -->
+            <View android:id="@+id/gapSpacer" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="0" />
 
             <!-- RIGHT camera slot -->
-            <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1">
+            <FrameLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:background="@android:color/black">
 
                 <com.jiangdg.ausbc.widget.AspectRatioTextureView android:id="@+id/textureRight" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_gravity="center" />
 
@@ -72,6 +75,14 @@
                 <TextView android:id="@+id/scaleLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/scale_label" android:textColor="@android:color/white" android:textSize="12sp" />
 
                 <SeekBar android:id="@+id/scaleSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+            </LinearLayout>
+
+            <!-- Gap slider column -->
+            <LinearLayout android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:orientation="vertical" android:paddingHorizontal="12dp" android:paddingVertical="8dp">
+
+                <TextView android:id="@+id/gapLabel" android:layout_width="wrap_content" android:layout_height="wrap_content" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/gap_label" android:textColor="@android:color/white" android:textSize="12sp" />
+
+                <SeekBar android:id="@+id/gapSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
             </LinearLayout>
 
             <TextView android:id="@+id/swapToggle" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />

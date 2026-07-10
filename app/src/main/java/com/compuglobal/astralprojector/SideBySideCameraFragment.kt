@@ -11,6 +11,7 @@ import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
@@ -118,6 +119,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var settingsScroll: View? = null
     private var settingsScrim: View? = null
     private var settingsToggle: TextView? = null
+
+    /** Transparent spacer between the panes; its layout weight sets the passthrough gap. */
+    private var gapSpacer: View? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
@@ -268,6 +272,28 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 val scale = progressToScale(progress)
                 scaleLabel.text = str(R.string.scale_label, (scale * 100f).toInt())
                 if (fromUser) SpatialControls.setPanelScale(requireContext(), scale)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
+
+        // Gap slider: 0..100% maps to the transparent spacer's layout weight, widening the
+        // passthrough-visible gap between the two panes (100% = gap takes half the row width).
+        // Pure view layout — cheap enough to apply live on every progress tick.
+        gapSpacer = root.findViewById(R.id.gapSpacer)
+        val gapLabel = root.findViewById<TextView>(R.id.gapLabel)
+        val gapSlider = root.findViewById<SeekBar>(R.id.gapSlider)
+        val initialGap = loadGapPct()
+        gapSlider.progress = initialGap
+        gapLabel.text = str(R.string.gap_label, initialGap)
+        applyGap(initialGap)
+        gapSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                gapLabel.text = str(R.string.gap_label, progress)
+                if (fromUser) {
+                    applyGap(progress)
+                    saveGapPct(progress)
+                }
             }
             override fun onStartTrackingTouch(sb: SeekBar) = Unit
             override fun onStopTrackingTouch(sb: SeekBar) = Unit
@@ -631,6 +657,27 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             .edit().putBoolean(PREF_FLIP_H, value).apply()
     }
 
+    private fun loadGapPct(): Int =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(PREF_GAP_PCT, 0).coerceIn(0, 100)
+
+    private fun saveGapPct(value: Int) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(PREF_GAP_PCT, value).apply()
+    }
+
+    /**
+     * Gap percent -> spacer layout weight. Panes have weight 1 each, so weight w gives the
+     * spacer w/(2+w) of the row: 100% -> weight 2 -> half the row width. The panes' own
+     * layout-change listeners re-run applyAspect when they resize.
+     */
+    private fun applyGap(pct: Int) {
+        val spacer = gapSpacer ?: return
+        val lp = spacer.layoutParams as LinearLayout.LayoutParams
+        lp.weight = pct / 100f * MAX_GAP_WEIGHT
+        spacer.layoutParams = lp
+    }
+
     private fun buildRequest(): CameraRequest =
         CameraRequest.Builder()
             .setPreviewWidth(PREVIEW_WIDTH)
@@ -778,6 +825,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         when (sb.id) {
             R.id.curveSlider -> SpatialControls.setPanelCurve(requireContext(), sb.progress / 100f)
             R.id.scaleSlider -> SpatialControls.setPanelScale(requireContext(), progressToScale(sb.progress))
+            R.id.gapSlider -> {
+                applyGap(sb.progress)
+                saveGapPct(sb.progress)
+            }
         }
         return true
     }
@@ -792,6 +843,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREF_SWAPPED = "panes_swapped"
         private const val PREF_ROTATION = "rotation_deg"
         private const val PREF_FLIP_H = "flip_horizontal"
+        private const val PREF_GAP_PCT = "pane_gap_pct"
+        private const val MAX_GAP_WEIGHT = 2f         // gap slider at 100% = gap takes half the row
         private const val SWAP_REOPEN_DELAY_MS = 300L
         private const val OPEN_RETRY_BASE_MS = 600L   // retry delay per attempt (multiplied by attempt#)
         private const val MAX_REOPEN_ATTEMPTS = 3
