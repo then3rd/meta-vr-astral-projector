@@ -38,24 +38,40 @@ class HeadFollowSystem(
     // Last pose of the panel's visible surface, used as the interpolation start when smoothing.
     private var currentPose: Pose? = null
 
+    // Entity pose last written via setComponent, so a converged panel (smoothing settled, head
+    // still) stops dirtying the entity's Transform every frame.
+    private var lastWrittenPose: Pose? = null
+    private var lastEntity: com.meta.spatial.core.Entity? = null
+
+    // The attachment system is registered once for the app's lifetime; cache it instead of a
+    // systemManager lookup every frame.
+    private var bodySystem: PlayerBodyAttachmentSystem? = null
+
     override fun execute() {
         if (!isEnabled()) {
-            // Drop the cached pose so re-enabling snaps straight to the head instead of easing
-            // in from a stale position.
+            // Drop the cached poses so re-enabling snaps straight to the head instead of easing
+            // in from a stale position (and always re-writes after e.g. a curve morph moved us).
             currentPose = null
+            lastWrittenPose = null
             return
         }
         val entity = panelEntity() ?: return
+        if (entity !== lastEntity) {
+            // Fresh entity (e.g. stereo recreation) spawns at its own pose — force a write.
+            lastEntity = entity
+            lastWrittenPose = null
+        }
 
-        val head = systemManager
-            .tryFindSystem<PlayerBodyAttachmentSystem>()
+        val system = bodySystem
+            ?: systemManager.tryFindSystem<PlayerBodyAttachmentSystem>()?.also { bodySystem = it }
+        val head = system
             ?.tryGetLocalPlayerAvatarBody()
             ?.head
             ?: return
         val headPose = head.tryGetComponent<Transform>()?.transform ?: return
         // Before tracking initializes, the head sits at the identity pose — ignore it so the panel
         // doesn't snap to the origin.
-        if (headPose == Pose()) return
+        if (headPose == IDENTITY_POSE) return
 
         // A point `distance` metres in front of the head. In the Spatial SDK the head entity's
         // local +Z axis points forward (matching the samples' LookAtHead zOffset default of +1).
@@ -79,11 +95,40 @@ class HeadFollowSystem(
         // For a curved panel, step from the surface pose back to the entity origin (cylinder
         // axis). Flat panels have backOffset 0, leaving the pose untouched.
         val entityT = pose.t - (pose.q * Vector3(0f, 0f, backOffset()))
+
+        // Skip the ECS write when the panel is already (sub-millimetre / sub-0.1°) at the target:
+        // with smoothing on the pose converges and, head still, would otherwise dirty the panel
+        // entity's Transform on every one of ~72 frames/s indefinitely.
+        val last = lastWrittenPose
+        if (last != null && distanceSq(entityT, last.t) < POS_EPS_SQ && rotationClose(pose.q, last.q)) {
+            return
+        }
+        lastWrittenPose = Pose(entityT, pose.q)
         entity.setComponent(Transform(Pose(entityT, pose.q)))
+    }
+
+    private fun distanceSq(a: Vector3, b: Vector3): Float {
+        val dx = a.x - b.x
+        val dy = a.y - b.y
+        val dz = a.z - b.z
+        return dx * dx + dy * dy + dz * dz
+    }
+
+    /** True when the quaternions differ by a negligible rotation (|dot| ~ 1). */
+    private fun rotationClose(a: Quaternion, b: Quaternion): Boolean {
+        val dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+        return dot > ROT_DOT_MIN || dot < -ROT_DOT_MIN
     }
 
     private companion object {
         // Fraction of the remaining distance covered each frame (~72 fps on Quest) when smoothing.
         const val SMOOTHING_FACTOR = 0.15f
+
+        val IDENTITY_POSE = Pose()
+
+        // Convergence thresholds for skipping the per-frame Transform write: 1 mm position,
+        // cos(half-angle) for ~0.1 degrees rotation.
+        const val POS_EPS_SQ = 1e-6f
+        const val ROT_DOT_MIN = 0.9999996f
     }
 }

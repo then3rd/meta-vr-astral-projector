@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -96,6 +97,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var dumps = 0
 
+    /** Background thread for the periodic state dump; quit on view teardown. */
+    private var dumpThread: HandlerThread? = null
+
     // Debounce timestamp for thumbstick-driven focus movement in the settings menu.
     private var lastStickMove = 0L
 
@@ -113,6 +117,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var logScroll: ScrollView? = null
     private var logOverlay: View? = null
     private val logLines = ArrayDeque<String>()
+
+    /** True when logLines changed while the overlay was hidden, so its text needs a rebuild. */
+    private var logTextStale = false
 
     // Settings controls row (toggled by the gear button; hidden by default).
     private var settingsList: ViewGroup? = null
@@ -154,6 +161,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val logClose = root.findViewById<TextView>(R.id.logClose)
         val setLogVisible = { show: Boolean ->
             logOverlay?.visibility = if (show) View.VISIBLE else View.GONE
+            if (show) refreshLogText()
             logToggle.text = str(if (show) R.string.log_hide else R.string.log_show)
         }
         logToggle.setOnClickListener {
@@ -376,6 +384,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             .forEach { exit ->
                 exit.setOnClickListener {
                     FileLogger.log("exit stereo tapped -> mono (panel will recreate)")
+                    // Undo the 150% stereo default so mono comes back at its own 100% default.
+                    SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_PANEL_SCALE)
                     SpatialControls.setStereoEnabled(requireContext(), false)
                 }
             }
@@ -503,12 +513,34 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     /** FileLogger invokes this from arbitrary threads; marshal to the UI thread. */
     private fun appendLog(line: String) {
         mainHandler.post {
-            val tv = logText ?: return@post
             logLines.addLast(line)
-            while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
-            tv.text = logLines.joinToString("\n")
+            var trimmed = false
+            while (logLines.size > MAX_LOG_LINES) { logLines.removeFirst(); trimmed = true }
+            val tv = logText ?: return@post
+            // While the overlay is hidden, only the deque is maintained — rebuilding a ~400-line
+            // string and re-laying-out the TextView per log line is main-thread work for nothing.
+            if (logOverlay?.visibility != View.VISIBLE) {
+                logTextStale = true
+                return@post
+            }
+            if (logTextStale || trimmed) {
+                tv.text = logLines.joinToString("\n")
+                logTextStale = false
+            } else {
+                if (tv.text.isNotEmpty()) tv.append("\n")
+                tv.append(line)
+            }
             logScroll?.post { logScroll?.fullScroll(View.FOCUS_DOWN) }
         }
+    }
+
+    /** Rebuilds the overlay text from the deque if lines arrived while it was hidden. */
+    private fun refreshLogText() {
+        val tv = logText ?: return
+        if (!logTextStale) return
+        tv.text = logLines.joinToString("\n")
+        logTextStale = false
+        logScroll?.post { logScroll?.fullScroll(View.FOCUS_DOWN) }
     }
 
     override fun initView() {
@@ -631,16 +663,24 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     private fun scheduleStateDump() {
-        mainHandler.postDelayed(object : Runnable {
+        // Runs on its own thread: each tick makes several Binder calls (device list, USB
+        // permission checks) whose latency would otherwise land on the main thread every 3 s —
+        // observed as a periodic pane stutter during the first ~40 s of a session.
+        val thread = HandlerThread("StateDump").also { it.start() }
+        dumpThread = thread
+        val handler = Handler(thread.looper)
+        handler.postDelayed(object : Runnable {
             override fun run() {
-                val devices = runCatching { getDeviceList() }.getOrNull()
-                val sb = StringBuilder("state-dump #${dumps}: deviceList=${devices?.size ?: "null"} mapSize=${getCameraMap().size}")
-                getCameraMap().values.forEach { cam ->
-                    val d = cam.getUsbDevice()
-                    sb.append("\n    - ${desc(d)} hasPermission=${safeHasPermission(d)} opened=${runCatching { cam.isCameraOpened() }.getOrNull()}")
-                }
-                FileLogger.log(sb.toString())
-                if (++dumps < 12) mainHandler.postDelayed(this, 3000)
+                runCatching {
+                    val devices = runCatching { getDeviceList() }.getOrNull()
+                    val sb = StringBuilder("state-dump #${dumps}: deviceList=${devices?.size ?: "null"} mapSize=${getCameraMap().size}")
+                    getCameraMap().values.toList().forEach { cam ->
+                        val d = cam.getUsbDevice()
+                        sb.append("\n    - ${desc(d)} hasPermission=${safeHasPermission(d)} opened=${runCatching { cam.isCameraOpened() }.getOrNull()}")
+                    }
+                    FileLogger.log(sb.toString())
+                }.onFailure { FileLogger.log("state-dump failed", it) }
+                if (++dumps < 12) handler.postDelayed(this, 3000) else thread.quitSafely()
             }
         }, 2000)
     }
@@ -944,6 +984,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         stereoGearRow = null
         stereoHalves = emptyList()
         mainHandler.removeCallbacksAndMessages(null)
+        dumpThread?.quitSafely()
+        dumpThread = null
         super.onDestroyView()
     }
 
@@ -1009,6 +1051,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             (keyCode == KeyEvent.KEYCODE_BUTTON_B || keyCode == KeyEvent.KEYCODE_BACK)
         ) {
             FileLogger.log("controller exit stereo -> mono (panel will recreate)")
+            // Undo the 150% stereo default so mono comes back at its own 100% default.
+            SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_PANEL_SCALE)
             SpatialControls.setStereoEnabled(requireContext(), false)
             return true
         }
