@@ -3,6 +3,7 @@ package com.compuglobal.astralprojector
 import android.content.Context
 import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -126,6 +127,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var settingsScroll: View? = null
     private var settingsScrim: View? = null
     private var settingsToggle: TextView? = null
+    private var statusReadout: TextView? = null
+    private var statusReadoutLeft: TextView? = null
+    private var statusReadoutRight: TextView? = null
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
     /** Transparent spacer between the panes; its layout weight sets the passthrough gap. */
     private var gapSpacer: View? = null
@@ -178,6 +183,13 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         settingsToggle = settingsBtn
         settingsBtn.setOnClickListener { toggleSettings() }
         root.findViewById<TextView>(R.id.resetButton).setOnClickListener { resetAllSettings() }
+
+        // Clock + battery readout, left of the settings button. Re-posts itself once a second via
+        // mainHandler, which onDestroyView already clears (removeCallbacksAndMessages(null)).
+        statusReadout = root.findViewById(R.id.statusReadout)
+        statusReadoutLeft = root.findViewById(R.id.statusReadoutLeft)
+        statusReadoutRight = root.findViewById(R.id.statusReadoutRight)
+        startStatusReadoutTicker()
 
         root.findViewById<TextView>(R.id.buildTimestamp).text =
             str(R.string.build_time_label,
@@ -810,6 +822,31 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     /**
+     * Updates the clock + battery readout and re-posts itself once a second. Runs on mainHandler,
+     * which onDestroyView clears via removeCallbacksAndMessages(null), so this stops on teardown
+     * without an explicit flag.
+     */
+    private fun startStatusReadoutTicker() {
+        val tick = object : Runnable {
+            override fun run() {
+                // Guard on statusReadout (cleared in onDestroyView), not getView(): this is first
+                // invoked synchronously from getRootView(), before the fragment's own view field
+                // is assigned, so checking view == null here would abort on the very first tick.
+                if (statusReadout == null) return
+                val time = timeFormat.format(Date())
+                val battery = requireContext().getSystemService(BatteryManager::class.java)
+                    ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val text = if (battery != null && battery in 0..100) "$time  $battery%" else time
+                statusReadout?.text = text
+                statusReadoutLeft?.text = text
+                statusReadoutRight?.text = text
+                mainHandler.postDelayed(this, STATUS_READOUT_INTERVAL_MS)
+            }
+        }
+        tick.run()
+    }
+
+    /**
      * Restores every setting to its default: the pane prefs this fragment owns (rotation, flip,
      * aspect, gap, swap) and the shared spatial controls (whose setters fire ImmersiveActivity's
      * pref listener, re-applying follow/smoothing/passthrough/scale/curve live). Also refreshes
@@ -980,6 +1017,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         settingsScroll = null
         settingsScrim = null
         settingsToggle = null
+        statusReadout = null
+        statusReadoutLeft = null
+        statusReadoutRight = null
         stereoOverlay = null
         stereoGearRow = null
         stereoHalves = emptyList()
@@ -1162,5 +1202,6 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val STICK_DEADZONE = 0.5f       // stick magnitude before a focus move fires
         private const val STICK_REPEAT_MS = 250L      // min gap between stick-driven focus moves
         private const val SEEKBAR_STEP = 5            // progress units per D-pad/stick nudge
+        private const val STATUS_READOUT_INTERVAL_MS = 1000L
     }
 }
