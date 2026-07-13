@@ -146,6 +146,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     // AAC -> MP4). Not persisted — recording never survives a relaunch.
     private var recording = false
     private var recordToggle: TextView? = null
+    private var compositeMode = false
+    private var compositeToggle: TextView? = null
+    private var compositeRecorder: CompositeRecorder? = null
     private var passthroughRecorder: PassthroughRecorder? = null
 
     // AUSBC's Mp4Muxer only starts once BOTH its video and audio tracks arrive, so without the
@@ -311,6 +314,17 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
         recordToggle = root.findViewById(R.id.recordToggle)
         recordToggle?.setOnClickListener { toggleRecording() }
+
+        compositeMode = loadCompositeMode()
+        val compositeBtn = root.findViewById<TextView>(R.id.compositeToggle)
+        compositeToggle = compositeBtn
+        compositeBtn.text = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate)
+        compositeBtn.setOnClickListener {
+            compositeMode = !compositeMode
+            saveCompositeMode(compositeMode)
+            compositeBtn.text = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate)
+            FileLogger.log("record mode -> ${if (compositeMode) "composite" else "separate"}")
+        }
 
         // Curve slider: 0..100% maps directly to curve amount 0.0..1.0 (flat -> cylinder).
         val curveLabel = root.findViewById<TextView>(R.id.curveLabel)
@@ -550,15 +564,27 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         halves.forEach { half ->
             half.findViewById<TextView>(R.id.stRecord).setOnClickListener { toggleRecording() }
         }
+
+        val compositeBtns = halves.map { it.findViewById<TextView>(R.id.stCompositeMode) }
+        compositeBtns.forEach { it.text = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate) }
+        compositeBtns.forEach { btn ->
+            btn.setOnClickListener {
+                compositeMode = !compositeMode
+                saveCompositeMode(compositeMode)
+                val label = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate)
+                compositeBtns.forEach { it.text = label }
+                compositeToggle?.text = label
+                FileLogger.log("stereo record mode -> ${if (compositeMode) "composite" else "separate"}")
+            }
+        }
     }
 
     // --- recording ---------------------------------------------------------------
 
     private fun toggleRecording() {
-        if (recording) {
-            stopRecording()
-            return
-        }
+        if (recording) { stopRecording(); return }
+        // Composite mode is video-only (no AudioRecord needed), so skip the audio-permission check.
+        if (compositeMode) { startRecording(audioGranted = false); return }
         val ctx = context ?: return
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
@@ -571,55 +597,76 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     /**
-     * Starts one MP4 per open USB camera (named after the pane it's displayed in, so the file
-     * matches what the user sees post-swap), plus an optional passthrough recording on Quest 3/3S
-     * (Horizon OS v74+ only — silently skipped on Quest 2 where camera2 exposes no devices).
-     * Files land in /sdcard/Recordings or the app-private Movies dir:
-     * REC_<timestamp>_{left,right,passthrough}.mp4
+     * Starts recording. Two modes:
+     *
+     * **Separate** (default): one MP4 per open USB camera via AUSBC (H.264 + mic AAC).
+     * Requires WRITE_EXTERNAL_STORAGE (pm-granted) — AUSBC's gate — and RECORD_AUDIO.
+     * Files: REC_<ts>_{left,right}.mp4
+     *
+     * **Composite**: a single side-by-side MP4 captured from both TextureViews via MediaCodec
+     * (H.264, video-only — adding a third AudioRecord alongside AUSBC's two is risky on Quest).
+     * No WRITE_EXTERNAL_STORAGE or RECORD_AUDIO needed.
+     * File: REC_<ts>_composite.mp4
+     *
+     * Either mode also attempts passthrough recording (Quest 3/3S + Horizon OS v74+ only;
+     * silently skipped on Quest 2).
+     * All files land in /sdcard/Recordings or the app-private Movies dir.
      */
     private fun startRecording(audioGranted: Boolean) {
         if (recording) return
         val ctx = appCtx ?: context?.applicationContext ?: return
         val dir = recordingsDir(ctx)
         val base = "REC_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        // AUSBC's captureVideoStartInternal bails out (onError, no file ever created) unless
-        // checkSelfPermission(WRITE_EXTERNAL_STORAGE) passes — even though scoped storage makes
-        // the permission itself meaningless. It can't be granted via a runtime dialog on
-        // targetSdk 30+ (auto-denied); it must be pm-granted like the other recording perms.
-        val storageGranted = ContextCompat.checkSelfPermission(
-            ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!storageGranted) {
-            FileLogger.log(
-                "record: WRITE_EXTERNAL_STORAGE not granted — AUSBC refuses per-camera recording. " +
-                    "Fix: adb shell pm grant com.compuglobal.astralprojector " +
-                    "android.permission.WRITE_EXTERNAL_STORAGE"
-            )
-            return
+
+        if (compositeMode) {
+            val cr = compositeRecorder ?: CompositeRecorder(ctx).also { compositeRecorder = it }
+            val left = textures[displayIndexFor(0)]
+            val right = textures[displayIndexFor(1)]
+            if (!cr.start(File(dir, "${base}_composite.mp4"), left, right)) {
+                FileLogger.log("record: composite recorder failed to start")
+                return
+            }
+        } else {
+            // AUSBC's captureVideoStartInternal bails out (onError, no file ever created) unless
+            // checkSelfPermission(WRITE_EXTERNAL_STORAGE) passes — even though scoped storage makes
+            // the permission itself meaningless. It can't be granted via a runtime dialog on
+            // targetSdk 30+ (auto-denied); it must be pm-granted like the other recording perms.
+            val storageGranted = ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!storageGranted) {
+                FileLogger.log(
+                    "record: WRITE_EXTERNAL_STORAGE not granted — AUSBC refuses per-camera recording. " +
+                        "Fix: adb shell pm grant com.compuglobal.astralprojector " +
+                        "android.permission.WRITE_EXTERNAL_STORAGE"
+                )
+                return
+            }
+            if (!audioGranted) {
+                FileLogger.log("record: RECORD_AUDIO denied — AUSBC's muxer stalls without the mic track")
+                return
+            }
+            var started = 0
+            for (idx in 0 until SLOT_COUNT) {
+                val cam = slots[idx] ?: continue
+                if (!runCatching { cam.isCameraOpened() }.getOrDefault(false)) continue
+                val side = if (displayIndexFor(idx) == 0) "left" else "right"
+                // Mp4Muxer appends ".mp4" itself, so the path is passed extension-less.
+                val path = File(dir, "${base}_$side").absolutePath
+                FileLogger.log("record: start slot=$idx ($side) -> $path.mp4")
+                runCatching { cam.captureVideoStart(recordCallback(side), path, 0L) }
+                    .onFailure { FileLogger.log("record: captureVideoStart($side) FAILED", it) }
+                    .onSuccess { started++ }
+            }
+            if (started == 0) {
+                FileLogger.log("record: no open USB camera to record")
+                return
+            }
         }
-        if (!audioGranted) {
-            FileLogger.log("record: RECORD_AUDIO denied — AUSBC's muxer stalls without the mic track")
-            return
-        }
-        var started = 0
-        for (idx in 0 until SLOT_COUNT) {
-            val cam = slots[idx] ?: continue
-            if (!runCatching { cam.isCameraOpened() }.getOrDefault(false)) continue
-            val side = if (displayIndexFor(idx) == 0) "left" else "right"
-            // Mp4Muxer appends ".mp4" itself, so the path is passed extension-less.
-            val path = File(dir, "${base}_$side").absolutePath
-            FileLogger.log("record: start slot=$idx ($side) -> $path.mp4")
-            runCatching { cam.captureVideoStart(recordCallback(side), path, 0L) }
-                .onFailure { FileLogger.log("record: captureVideoStart($side) FAILED", it) }
-                .onSuccess { started++ }
-        }
-        if (started == 0) {
-            FileLogger.log("record: no open USB camera to record")
-            return
-        }
+
         // Passthrough recording: Quest 3/3S + Horizon OS v74+ only. Any failure (missing
         // permission, no camera2 devices on Quest 2, API not present) is caught and logged so
-        // it never blocks the USB camera recordings above.
+        // it never blocks the recordings above.
         runCatching {
             val pt = passthroughRecorder ?: PassthroughRecorder(ctx).also { passthroughRecorder = it }
             pt.start(File(dir, "${base}_passthrough.mp4"))
@@ -631,9 +678,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
     private fun stopRecording() {
         if (!recording) return
-        FileLogger.log("record: stop")
-        // captureVideoStop on a camera that isn't recording is a no-op, so blanket-stop all slots.
-        slots.forEach { cam -> runCatching { cam?.captureVideoStop() } }
+        FileLogger.log("record: stop (mode=${if (compositeMode) "composite" else "separate"})")
+        if (compositeMode) {
+            runCatching { compositeRecorder?.stop() }
+                .onFailure { FileLogger.log("record: composite stop failed", it) }
+        } else {
+            // captureVideoStop on a camera that isn't recording is a no-op, so blanket-stop all slots.
+            slots.forEach { cam -> runCatching { cam?.captureVideoStop() } }
+        }
         runCatching { passthroughRecorder?.stop() }
             .onFailure { FileLogger.log("record: passthrough stop failed", it) }
         recording = false
@@ -1137,6 +1189,15 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             .edit().putInt(PREF_GAP_PCT, value).apply()
     }
 
+    private fun loadCompositeMode(): Boolean =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_COMPOSITE_MODE, false)
+
+    private fun saveCompositeMode(value: Boolean) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_COMPOSITE_MODE, value).apply()
+    }
+
     /**
      * Gap percent -> spacer layout weight. Panes have weight 1 each, so weight w gives the
      * spacer w/(2+w) of the row: 100% -> weight 2 -> half the row width. The panes' own
@@ -1173,6 +1234,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     override fun onDestroyView() {
         stopRecording()
         recordToggle = null
+        compositeToggle = null
         FileLogger.setListener(null)
         logText = null
         logScroll = null
@@ -1367,6 +1429,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREF_ROTATION = "rotation_deg"
         private const val PREF_FLIP_H = "flip_horizontal"
         private const val PREF_GAP_PCT = "pane_gap_pct"
+        private const val PREF_COMPOSITE_MODE = "record_composite"
         private const val MAX_GAP_WEIGHT = 2f         // gap slider at 100% = gap takes half the row
         private const val MAX_GAP_WEIGHT_STEREO = 0.5f // stereo: gap is a divergence trim, keep small
         private const val SWAP_REOPEN_DELAY_MS = 300L
