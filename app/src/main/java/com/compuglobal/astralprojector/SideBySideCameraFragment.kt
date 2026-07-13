@@ -1,9 +1,12 @@
 package com.compuglobal.astralprojector
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
 import android.os.BatteryManager
+import android.os.Environment
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -17,12 +20,16 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.MultiCameraFragment
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
+import com.jiangdg.ausbc.callback.ICaptureCallBack
 import com.jiangdg.ausbc.camera.bean.CameraRequest
 import com.jiangdg.ausbc.camera.bean.PreviewSize
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -134,6 +141,20 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
 
     /** Transparent spacer between the panes; its layout weight sets the passthrough gap. */
     private var gapSpacer: View? = null
+
+    // Recording: each open USB camera records itself via AUSBC's captureVideoStart (H.264 + mic
+    // AAC -> MP4). Not persisted — recording never survives a relaunch.
+    private var recording = false
+    private var recordToggle: TextView? = null
+    private var passthroughRecorder: PassthroughRecorder? = null
+
+    // AUSBC's Mp4Muxer only starts once BOTH its video and audio tracks arrive, so without the
+    // mic permission the per-camera files would stay empty forever — request it on first Record.
+    private val audioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            FileLogger.log("record: RECORD_AUDIO request -> granted=$granted")
+            startRecording(audioGranted = granted)
+        }
 
     // Snapshot of the stereo pref at view creation. The panel (and with it this fragment) is
     // recreated whenever the pref flips, so the flag is stable for the view's lifetime: in stereo
@@ -287,6 +308,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_STEREO_SCALE)
             SpatialControls.setStereoEnabled(requireContext(), true)
         }
+
+        recordToggle = root.findViewById(R.id.recordToggle)
+        recordToggle?.setOnClickListener { toggleRecording() }
 
         // Curve slider: 0..100% maps directly to curve amount 0.0..1.0 (flat -> cylinder).
         val curveLabel = root.findViewById<TextView>(R.id.curveLabel)
@@ -520,6 +544,143 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         halves.forEach { half ->
             half.findViewById<TextView>(R.id.stSwap).setOnClickListener { performSwap() }
         }
+
+        // Record start/stop, duplicated per eye like everything else; updateRecordLabels()
+        // refreshes both copies (and the hidden mono button) whenever the state flips.
+        halves.forEach { half ->
+            half.findViewById<TextView>(R.id.stRecord).setOnClickListener { toggleRecording() }
+        }
+    }
+
+    // --- recording ---------------------------------------------------------------
+
+    private fun toggleRecording() {
+        if (recording) {
+            stopRecording()
+            return
+        }
+        val ctx = context ?: return
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startRecording(audioGranted = true)
+        } else {
+            FileLogger.log("record: requesting RECORD_AUDIO")
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    /**
+     * Starts one MP4 per open USB camera (named after the pane it's displayed in, so the file
+     * matches what the user sees post-swap), plus an optional passthrough recording on Quest 3/3S
+     * (Horizon OS v74+ only — silently skipped on Quest 2 where camera2 exposes no devices).
+     * Files land in /sdcard/Recordings or the app-private Movies dir:
+     * REC_<timestamp>_{left,right,passthrough}.mp4
+     */
+    private fun startRecording(audioGranted: Boolean) {
+        if (recording) return
+        val ctx = appCtx ?: context?.applicationContext ?: return
+        val dir = recordingsDir(ctx)
+        val base = "REC_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        // AUSBC's captureVideoStartInternal bails out (onError, no file ever created) unless
+        // checkSelfPermission(WRITE_EXTERNAL_STORAGE) passes — even though scoped storage makes
+        // the permission itself meaningless. It can't be granted via a runtime dialog on
+        // targetSdk 30+ (auto-denied); it must be pm-granted like the other recording perms.
+        val storageGranted = ContextCompat.checkSelfPermission(
+            ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!storageGranted) {
+            FileLogger.log(
+                "record: WRITE_EXTERNAL_STORAGE not granted — AUSBC refuses per-camera recording. " +
+                    "Fix: adb shell pm grant com.compuglobal.astralprojector " +
+                    "android.permission.WRITE_EXTERNAL_STORAGE"
+            )
+            return
+        }
+        if (!audioGranted) {
+            FileLogger.log("record: RECORD_AUDIO denied — AUSBC's muxer stalls without the mic track")
+            return
+        }
+        var started = 0
+        for (idx in 0 until SLOT_COUNT) {
+            val cam = slots[idx] ?: continue
+            if (!runCatching { cam.isCameraOpened() }.getOrDefault(false)) continue
+            val side = if (displayIndexFor(idx) == 0) "left" else "right"
+            // Mp4Muxer appends ".mp4" itself, so the path is passed extension-less.
+            val path = File(dir, "${base}_$side").absolutePath
+            FileLogger.log("record: start slot=$idx ($side) -> $path.mp4")
+            runCatching { cam.captureVideoStart(recordCallback(side), path, 0L) }
+                .onFailure { FileLogger.log("record: captureVideoStart($side) FAILED", it) }
+                .onSuccess { started++ }
+        }
+        if (started == 0) {
+            FileLogger.log("record: no open USB camera to record")
+            return
+        }
+        // Passthrough recording: Quest 3/3S + Horizon OS v74+ only. Any failure (missing
+        // permission, no camera2 devices on Quest 2, API not present) is caught and logged so
+        // it never blocks the USB camera recordings above.
+        runCatching {
+            val pt = passthroughRecorder ?: PassthroughRecorder(ctx).also { passthroughRecorder = it }
+            pt.start(File(dir, "${base}_passthrough.mp4"))
+        }.onFailure { FileLogger.log("record: passthrough recorder failed to start", it) }
+
+        recording = true
+        updateRecordLabels()
+    }
+
+    private fun stopRecording() {
+        if (!recording) return
+        FileLogger.log("record: stop")
+        // captureVideoStop on a camera that isn't recording is a no-op, so blanket-stop all slots.
+        slots.forEach { cam -> runCatching { cam?.captureVideoStop() } }
+        runCatching { passthroughRecorder?.stop() }
+            .onFailure { FileLogger.log("record: passthrough stop failed", it) }
+        recording = false
+        updateRecordLabels()
+    }
+
+    /**
+     * Where recordings land. Preferred: the shared /sdcard/Recordings folder — "This headset /
+     * Recordings" in the Quest Files app — which needs the MANAGE_EXTERNAL_STORAGE appop
+     * (`adb shell appops set --uid com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow`;
+     * scoped storage allows no other write path there for video files). Without the grant, falls
+     * back to the app-private Movies dir (Android/data/<pkg>/files/Movies), which needs no
+     * permission but is only reachable via adb/MTP.
+     */
+    private fun recordingsDir(ctx: Context): File {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+            Environment.isExternalStorageManager()
+        ) {
+            val shared = File(Environment.getExternalStorageDirectory(), "Recordings")
+            if (shared.isDirectory || shared.mkdirs()) return shared
+            FileLogger.log("record: shared dir $shared not creatable; falling back to app dir")
+        } else {
+            FileLogger.log("record: no all-files access (adb: appops set --uid <pkg> MANAGE_EXTERNAL_STORAGE allow) — using app-private dir")
+        }
+        return ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: ctx.filesDir
+    }
+
+    /** AUSBC invokes these on the main thread (Mp4Muxer marshals via its main handler). */
+    private fun recordCallback(side: String) = object : ICaptureCallBack {
+        override fun onBegin() = FileLogger.log("record($side): began")
+        override fun onError(error: String?) = FileLogger.log("record($side): ERROR ${error ?: "unknown"}")
+        override fun onComplete(path: String?) {
+            FileLogger.log("record($side): saved $path")
+            // Register with MediaStore so the Files app / gallery sees it without a reboot.
+            path?.let { scanRecording(it) }
+        }
+    }
+
+    private fun scanRecording(path: String) {
+        val ctx = appCtx ?: return
+        android.media.MediaScannerConnection.scanFile(ctx, arrayOf(path), null, null)
+    }
+
+    private fun updateRecordLabels() {
+        val label = str(if (recording) R.string.record_stop else R.string.record_start)
+        recordToggle?.text = label
+        stereoHalves.forEach { it.findViewById<TextView>(R.id.stRecord)?.text = label }
     }
 
     /** FileLogger invokes this from arbitrary threads; marshal to the UI thread. */
@@ -812,6 +973,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     private fun performSwap() {
+        // Swapping close/reopens both cameras, which tears down their encoders mid-file — finish
+        // the recordings cleanly first rather than leaving truncated MP4s.
+        if (recording) stopRecording()
         swapped = !swapped
         FileLogger.log("swap -> $swapped")
         saveSwapped(swapped)
@@ -836,7 +1000,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 val time = timeFormat.format(Date())
                 val battery = requireContext().getSystemService(BatteryManager::class.java)
                     ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                val text = if (battery != null && battery in 0..100) "$time  $battery%" else time
+                val base = if (battery != null && battery in 0..100) "$time  $battery%" else time
+                val text = if (recording) "⏺ $base" else base
                 statusReadout?.text = text
                 statusReadoutLeft?.text = text
                 statusReadoutRight?.text = text
@@ -1006,6 +1171,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     override fun onDestroyView() {
+        stopRecording()
+        recordToggle = null
         FileLogger.setListener(null)
         logText = null
         logScroll = null
@@ -1082,6 +1249,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val focus = view?.findFocus() ?: return false
         return barItems().contains(focus)
     }
+
+    // ---- adb broadcast entry points (called by MainActivity.debugReceiver) ------
+
+    fun toggleRecordingFromAdb() = activity?.runOnUiThread { toggleRecording() }
+    fun startRecordingFromAdb() = activity?.runOnUiThread { if (!recording) toggleRecording() }
+    fun stopRecordingFromAdb()  = activity?.runOnUiThread { if (recording)  stopRecording() }
+    fun openSettingsFromAdb()   = activity?.runOnUiThread { setSettingsVisible(true) }
+    fun resetToDefaultsFromAdb() = activity?.runOnUiThread { resetAllSettings() }
 
     fun handleControllerKey(keyCode: Int): Boolean {
         // In stereo, B/BACK with the settings closed drops back to mono (recreating the panel

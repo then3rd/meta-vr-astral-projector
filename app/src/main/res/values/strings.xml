@@ -34,5 +34,7 @@
     <string name="curve_label">Curve: %1$d%%</string>
     <string name="scale_label">Scale: %1$d%%</string>
     <string name="gap_label">Gap: %1$d%%</string>
+    <string name="record_start">⏺ Record</string>
+    <string name="record_stop">⏹ Stop Rec</string>
     <string name="camera_permission_denied">Camera permission is required to access USB cameras. Grant it in Settings and relaunch.</string>
 </resources>

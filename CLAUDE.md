@@ -115,6 +115,30 @@ Decimal for the manifest device filter: vendor-id 3141, product-id 25446.
   (`applyPanelCurve`
   early-returns); the app always boots mono (`resetToDefaults` at launch). Dial in Swap/rotation in
   mono first, then enter stereo; per-eye check: cover one lens, only that eye should go dark.
+- Recording: the ⏺ Record toggle (mono top bar; `stRecord` in the per-eye stereo column) starts
+  one MP4 per open USB camera via AUSBC's `captureVideoStart` (H.264 + mic AAC; the 3.2.7
+  `Mp4Muxer` only calls `MediaMuxer.start()` once BOTH tracks arrive — verified in the bytecode —
+  so `RECORD_AUDIO` is mandatory: requested at launch and again on first Record if missing; each
+  camera opens its own `AudioRecord`, legal within one app but untested with two on Quest).
+  ALSO mandatory: `WRITE_EXTERNAL_STORAGE` — AUSBC's `captureVideoStartInternal` bails out
+  (onError "have no storage and audio permission", before its `Mp4Muxer` is constructed, so NO
+  left/right file ever appears) unless `checkSelfPermission` passes for both it and RECORD_AUDIO
+  (verified in the 3.2.7 bytecode). On targetSdk 34 the permission is scoped-storage-dead and its
+  runtime request is auto-denied, so it must be pm-granted (see below); the fragment mirrors the
+  check and logs the fix when missing.
+  Passthrough pixels are excluded from every screen-capture path by the compositor, so
+  `PassthroughRecorder` uses the Horizon OS Passthrough Camera API instead (camera2 +
+  `horizonos.permission.HEADSET_CAMERA`, v74+/Quest 3/3S only — on Quest 2 camera2 lists no
+  devices and it logs + skips): a video-only MediaRecorder capture of the left passthrough camera
+  (picked via vendor key `com.meta.extra_metadata.camera_source`; no mic to avoid a third
+  concurrent `AudioRecord`). Files: `REC_<timestamp>_{left,right,passthrough}.mp4` (`Mp4Muxer`
+  appends `.mp4` itself, so it's handed an extension-less path), saved to the shared
+  `/sdcard/Recordings` ("This headset/Recordings" in the Files app) when the app holds the
+  MANAGE_EXTERNAL_STORAGE appop — scoped storage allows no other write path there for video
+  (MediaStore restricts video to Movies/DCIM and AUSBC needs a raw path) — else falling back to
+  app-private `Android/data/<pkg>/files/Movies/`. Completed files are MediaScanner-scanned so the
+  Files app lists them immediately. Swap stops recording first (it
+  close/reopens the cameras, which would truncate the files); recording never survives a relaunch.
 - Debug aids: `FileLogger` (logcat + app-external-files file + in-memory buffer feeding an on-screen
   **Debug** overlay, opened by the "Debug" button in the settings menu, hidden by default). The
   Debug overlay's bottom control row holds the build timestamp, the **retry-permission** button, and
@@ -166,7 +190,21 @@ USB permission dialog per camera. Left/right slot depends on hub port, not on wh
   cameras open and stream MJPEG simultaneously on Quest 2.
 - Permissions can be pre-granted over adb, bypassing the in-headset dialogs:
   `adb shell pm grant com.compuglobal.astralprojector android.permission.CAMERA` and same for
-  `horizonos.permission.USB_CAMERA`.
+  `horizonos.permission.USB_CAMERA`, `android.permission.RECORD_AUDIO`,
+  `horizonos.permission.HEADSET_CAMERA`, and `android.permission.WRITE_EXTERNAL_STORAGE` (the
+  last one added 2026-07-12 — without it AUSBC refuses `captureVideoStart` and no per-camera
+  MP4s are written). This is effectively REQUIRED for the recording permissions: the in-panel
+  runtime request fires but comes back denied ~1.5 s later without a visible dialog (observed
+  2026-07-11 on Quest 2), so Record logs "RECORD_AUDIO denied" + "nothing recordable" until the
+  perms are pm-granted. Note `HEADSET_CAMERA` carries the `REVOKE_WHEN_REQUESTED` flag — a
+  future in-app requestPermissions for it can revoke a pm-granted state, but the app only
+  requests it while missing, so the grant is stable.
+  For saving recordings into the shared /sdcard/Recordings folder, additionally grant the
+  all-files appop (appop, not a pm permission — pm grant won't work):
+  `adb shell appops set --uid com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow`.
+  The `just grant-permissions` recipe automates all of the above.
+  All grants above were applied to the connected headset on 2026-07-12 (verified: recording
+  produces _left.mp4 and _right.mp4 in /sdcard/Recordings).
 - Note: logs showed the negotiated preview at 640x480@MJPEG despite requesting 1280x720 — resolution
   negotiation may need follow-up if 720p matters.
 - On-screen log overlay was added to diagnose when adb wasn't available (a USB thumb drive is NOT an

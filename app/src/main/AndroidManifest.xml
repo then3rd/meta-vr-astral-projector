@@ -10,7 +10,30 @@
          (permission group EXTERNAL_CAMERA). Without it, hasPermission()/requestPermission() on
          the UsbDevice are silently denied on Quest. Ignored on regular Android. -->
     <uses-permission android:name="horizonos.permission.USB_CAMERA" />
+    <!-- Recording: AUSBC's captureVideoStart muxes an AAC mic track alongside the H.264 video and
+         its Mp4Muxer only starts once BOTH tracks are added (verified in the 3.2.7 bytecode) — so
+         without RECORD_AUDIO the per-camera recordings never produce a playable file. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Passthrough recording: Horizon OS Passthrough Camera API (v74+, Quest 3/3S) exposes the
+         headset's forward passthrough cameras through camera2, gated behind this runtime
+         permission. Absent on Quest 2 / older OS — the recorder detects that and skips. -->
+    <uses-permission android:name="horizonos.permission.HEADSET_CAMERA" />
+    <!-- Lets recordings land in the shared /sdcard/Recordings folder ("This headset/Recordings"
+         in the Files app) instead of the app-private Movies dir. Scoped storage offers no other
+         path there for video (MediaStore only allows video under Movies/DCIM, and AUSBC's muxer
+         needs a plain file path). Appop-based: granted once via adb
+         (appops set com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow);
+         without the grant the app falls back to the app-private dir. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- AUSBC's captureVideoStartInternal (verified in the 3.2.7 bytecode) refuses to record —
+         onError("have no storage and audio permission"), before its Mp4Muxer is even constructed,
+         so no file ever appears — unless checkSelfPermission(WRITE_EXTERNAL_STORAGE) passes. The
+         permission grants nothing on targetSdk 30+ (scoped storage; MANAGE_EXTERNAL_STORAGE above
+         does the real work) and its runtime request is auto-denied, but it must be DECLARED so
+         `adb shell pm grant` can flip it to satisfy AUSBC's gate. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <!-- 6DOF head tracking: declares this is an immersive VR app so Horizon OS launches it into
          the headset's VR compositor rather than as a 2D panel in the home environment. -->
     <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="true" />

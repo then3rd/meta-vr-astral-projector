@@ -84,11 +84,16 @@ run-debug:
     "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.compuglobal.astralprojector -c android.intent.category.LAUNCHER 1
 
 # Grant required permissions (must re-run after every fresh install)
-# horizonos.permission.USB_CAMERA cannot be granted via runtime dialog on Horizon OS —
-# ADB is the only way for a sideloaded app.
+# horizonos.* and WRITE_EXTERNAL_STORAGE cannot be granted via runtime dialog — ADB only.
+# MANAGE_EXTERNAL_STORAGE is an appop (not a pm permission) — lets recordings land in
+# /sdcard/Recordings instead of the app-private dir.
 grant-permissions:
     "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.CAMERA
     "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector horizonos.permission.USB_CAMERA
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.RECORD_AUDIO
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector horizonos.permission.HEADSET_CAMERA
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.WRITE_EXTERNAL_STORAGE
+    "$ANDROID_HOME/platform-tools/adb" shell appops set --uid com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow
 
 # Build, install, grant permissions, and run
 refresh: build-debug install-debug grant-permissions run-debug
@@ -96,6 +101,12 @@ refresh: build-debug install-debug grant-permissions run-debug
 # List connected Android devices
 devices:
     "$ANDROID_HOME/platform-tools/adb" devices -l
+
+adb-tcp:
+    "$ANDROID_HOME/platform-tools/adb" tcpip 5555
+
+adb-tcp-connect ip:
+    "$ANDROID_HOME/platform-tools/adb" connect {{ ip }}:5555
 
 # Run unit tests
 test:
@@ -110,6 +121,56 @@ env:
     @echo "JAVA_HOME=$JAVA_HOME"
     @echo "ANDROID_HOME=$ANDROID_HOME"
 
+# ---- App control (broadcast intents; app must be running) -----------------------
+
+PKG := "com.compuglobal.astralprojector"
+
+# Start recording
+app-record-start:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RECORD_START
+
+# Stop recording
+app-record-stop:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RECORD_STOP
+
+# Toggle recording (start if stopped, stop if started)
+app-record-toggle:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RECORD_TOGGLE
+
+# Open the settings panel
+app-settings:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.SETTINGS_OPEN
+
+# Reset all settings to defaults
+app-reset:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RESET
+
+# Pull recordings to ./recordings/ (creates dir if needed)
+pull-recordings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="$ANDROID_HOME/platform-tools/adb"
+    mkdir -p recordings
+    "$ADB" pull /sdcard/Recordings/. recordings/ 2>/dev/null || \
+    "$ADB" pull /sdcard/Android/data/{{ PKG }}/files/Movies/. recordings/ 2>/dev/null || \
+    echo "No recordings found on device"
+
+# ---- Logging -------------------------------------------------------------------
+
+# Stream app logs live
+logs:
+    "$ANDROID_HOME/platform-tools/adb" logcat -s AstralProjector:V
+
+# Dump recent app logs (last 200 lines)
+logs-dump:
+    "$ANDROID_HOME/platform-tools/adb" logcat -d -s AstralProjector:V | tail -200
+
+# Pull the on-disk log file
+logs-pull:
+    "$ANDROID_HOME/platform-tools/adb" pull \
+        /sdcard/Android/data/{{ PKG }}/files/camera-eyes.log ./camera-eyes.log && \
+    cat ./camera-eyes.log
+
 # Capture the headset's mirror view (what the lenses show) and pull it to screenshots/ for preview.
 # Wakes the display first: screencap returns pure black while the headset's proximity sensor sleeps.
 screencap name="screencap":
@@ -120,7 +181,7 @@ screencap name="screencap":
     "$ADB" shell am broadcast -a com.oculus.vrpowermanager.automation_disable > /dev/null
     "$ADB" shell am broadcast -a com.oculus.vrpowermanager.prox_close > /dev/null
     sleep 4
-    OUT="screenshots/{{name}}-$(date +%Y%m%d-%H%M%S).png"
+    OUT="screenshots/{{ name }}-$(date +%Y%m%d-%H%M%S).png"
     "$ADB" exec-out screencap -p > "$OUT"
     echo "Saved: $OUT"
     echo "(If it came out black, the display hadn't woken yet — re-run.)"
@@ -154,11 +215,11 @@ test-curve pct="85":
     echo "Panel is on virtual display $DISP"
     # Curve slider track spans x=640..1280 at y=163 in the fixed 1920x960 panel layout
     # (bounds from: adb shell uiautomator dump --display-id $DISP).
-    X=$(( 640 + (1280 - 640) * {{pct}} / 100 ))
+    X=$(( 640 + (1280 - 640) * {{ pct }} / 100 ))
     "$ADB" logcat -c
     "$ADB" shell input -d "$DISP" swipe 640 163 "$X" 163 600
     sleep 2
     echo "--- app reaction (logcat) ---"
     "$ADB" logcat -d -s AstralProjector:V | grep -iE "curve|cylinder|quad|radius" | tail -5 || true
     echo "-----------------------------"
-    just screencap "curve-{{pct}}"
+    just screencap "curve-{{ pct }}"

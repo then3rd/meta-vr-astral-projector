@@ -31,4 +31,6 @@
     </LinearLayout>
 
     <TextView android:id="@+id/stSwap" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/swap_cameras" android:textColor="@android:color/white" android:textSize="14sp" />
+
+    <TextView android:id="@+id/stRecord" android:layout_width="220dp" android:layout_height="wrap_content" android:layout_marginBottom="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingVertical="12dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/record_start" android:textColor="@android:color/white" android:textSize="14sp" />
 </LinearLayout>

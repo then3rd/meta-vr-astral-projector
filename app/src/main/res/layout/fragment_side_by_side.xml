@@ -23,6 +23,11 @@
                  panel (brief blackout) with StereoMode.LeftRight. Lives in the top bar next to the
                  gear so it's reachable without opening the settings column. -->
             <TextView android:id="@+id/stereoToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/stereo_off" android:textColor="@android:color/white" android:textSize="16sp" />
+
+            <!-- Recording: both USB camera streams (plus passthrough where the Horizon OS
+                 passthrough camera API exists) to MP4s in the app's external Movies dir. In the
+                 top bar so start/stop doesn't require opening the settings column. -->
+            <TextView android:id="@+id/recordToggle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:background="@drawable/settings_item_bg" android:focusable="true" android:gravity="center" android:paddingHorizontal="18dp" android:paddingVertical="16dp" android:shadowColor="#000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3" android:text="@string/record_start" android:textColor="@android:color/white" android:textSize="16sp" />
         </LinearLayout>
 
         <!-- Stereo-only per-eye gear row. Placed in the vertical layout (not as a floating overlay)

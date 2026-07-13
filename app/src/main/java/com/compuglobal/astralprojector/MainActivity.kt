@@ -1,7 +1,12 @@
 package com.compuglobal.astralprojector
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -24,14 +29,24 @@ class MainActivity : AppCompatActivity() {
     companion object {
         /** Horizon OS (Quest) runtime permission gating USB UVC device access. */
         const val HORIZONOS_USB_CAMERA_PERMISSION = "horizonos.permission.USB_CAMERA"
+
+        /** Horizon OS (v74+) runtime permission gating camera2 access to the passthrough cameras. */
+        const val HORIZONOS_HEADSET_CAMERA_PERMISSION = "horizonos.permission.HEADSET_CAMERA"
+
+        // adb shell am broadcast -a com.compuglobal.astralprojector.RECORD_TOGGLE -n com.compuglobal.astralprojector/.MainActivity
+        const val ACTION_RECORD_TOGGLE = "com.compuglobal.astralprojector.RECORD_TOGGLE"
+        const val ACTION_RECORD_START  = "com.compuglobal.astralprojector.RECORD_START"
+        const val ACTION_RECORD_STOP   = "com.compuglobal.astralprojector.RECORD_STOP"
+        const val ACTION_SETTINGS_OPEN = "com.compuglobal.astralprojector.SETTINGS_OPEN"
+        const val ACTION_RESET         = "com.compuglobal.astralprojector.RESET"
     }
 
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
             FileLogger.log("Runtime permission results: $results")
-            // USB_CAMERA only exists on Horizon OS; on regular Android its denial is expected,
-            // so only CAMERA gates startup.
-            if (results[Manifest.permission.CAMERA] == true) {
+            // Only CAMERA gates startup: the horizonos.* permissions don't exist off Quest, and
+            // RECORD_AUDIO / HEADSET_CAMERA merely degrade recording if denied.
+            if (results[Manifest.permission.CAMERA] != false) {
                 attachCameraFragment()
             } else {
                 Toast.makeText(
@@ -55,13 +70,22 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         if (savedInstanceState == null) {
-            val missing = listOf(Manifest.permission.CAMERA, HORIZONOS_USB_CAMERA_PERMISSION)
-                .filter {
-                    ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-                }
-            if (missing.isEmpty() ||
-                missing.singleOrNull() == HORIZONOS_USB_CAMERA_PERMISSION && !isHorizonOs()
-            ) {
+            // RECORD_AUDIO (AUSBC's recorder needs the mic track) and HEADSET_CAMERA (passthrough
+            // recording) are requested up front alongside the camera permissions, but neither
+            // gates startup — denial just limits the Record feature. horizonos.* permissions are
+            // skipped where the OS doesn't define them (requesting an unknown permission is a
+            // silent permanent denial that would poison the whole dialog on some versions).
+            val missing = listOf(
+                Manifest.permission.CAMERA,
+                Manifest.permission.RECORD_AUDIO,
+                HORIZONOS_USB_CAMERA_PERMISSION,
+                HORIZONOS_HEADSET_CAMERA_PERMISSION,
+            ).filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }.filter {
+                !it.startsWith("horizonos.") || packageManager.isPermissionAvailable(it)
+            }
+            if (missing.isEmpty()) {
                 attachCameraFragment()
             } else {
                 FileLogger.log("Requesting runtime permissions: $missing")
@@ -69,9 +93,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
-    private fun isHorizonOs(): Boolean =
-        packageManager.isPermissionAvailable(HORIZONOS_USB_CAMERA_PERMISSION)
 
     private fun android.content.pm.PackageManager.isPermissionAvailable(name: String): Boolean =
         try {
@@ -134,4 +155,46 @@ class MainActivity : AppCompatActivity() {
         if (ev.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) remapStereoPointer(ev)
         return super.dispatchGenericMotionEvent(ev)
     }
+
+    // ---- adb debug control -------------------------------------------------------
+
+    private val debugReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            FileLogger.log("debugReceiver: action=${intent.action}")
+            val frag = cameraFragment() ?: run {
+                FileLogger.log("debugReceiver: no fragment attached")
+                return
+            }
+            when (intent.action) {
+                ACTION_RECORD_TOGGLE -> frag.toggleRecordingFromAdb()
+                ACTION_RECORD_START  -> frag.startRecordingFromAdb()
+                ACTION_RECORD_STOP   -> frag.stopRecordingFromAdb()
+                ACTION_SETTINGS_OPEN -> frag.openSettingsFromAdb()
+                ACTION_RESET         -> frag.resetToDefaultsFromAdb()
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter().apply {
+            addAction(ACTION_RECORD_TOGGLE)
+            addAction(ACTION_RECORD_START)
+            addAction(ACTION_RECORD_STOP)
+            addAction(ACTION_SETTINGS_OPEN)
+            addAction(ACTION_RESET)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(debugReceiver, filter, RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(debugReceiver, filter)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        unregisterReceiver(debugReceiver)
+    }
+
 }
