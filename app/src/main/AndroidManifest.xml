@@ -10,28 +10,86 @@
          (permission group EXTERNAL_CAMERA). Without it, hasPermission()/requestPermission() on
          the UsbDevice are silently denied on Quest. Ignored on regular Android. -->
     <uses-permission android:name="horizonos.permission.USB_CAMERA" />
+    <!-- Recording: AUSBC's captureVideoStart muxes an AAC mic track alongside the H.264 video and
+         its Mp4Muxer only starts once BOTH tracks are added (verified in the 3.2.7 bytecode) — so
+         without RECORD_AUDIO the per-camera recordings never produce a playable file. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Passthrough recording: Horizon OS Passthrough Camera API (v74+, Quest 3/3S) exposes the
+         headset's forward passthrough cameras through camera2, gated behind this runtime
+         permission. Absent on Quest 2 / older OS — the recorder detects that and skips. -->
+    <uses-permission android:name="horizonos.permission.HEADSET_CAMERA" />
+    <!-- Lets recordings land in the shared /sdcard/Recordings folder ("This headset/Recordings"
+         in the Files app) instead of the app-private Movies dir. Scoped storage offers no other
+         path there for video (MediaStore only allows video under Movies/DCIM, and AUSBC's muxer
+         needs a plain file path). Appop-based: granted once via adb
+         (appops set com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow);
+         without the grant the app falls back to the app-private dir. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- AUSBC's captureVideoStartInternal (verified in the 3.2.7 bytecode) refuses to record —
+         onError("have no storage and audio permission"), before its Mp4Muxer is even constructed,
+         so no file ever appears — unless checkSelfPermission(WRITE_EXTERNAL_STORAGE) passes. The
+         permission grants nothing on targetSdk 30+ (scoped storage; MANAGE_EXTERNAL_STORAGE above
+         does the real work) and its runtime request is auto-denied, but it must be DECLARED so
+         `adb shell pm grant` can flip it to satisfy AUSBC's gate. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- 6DOF head tracking: declares this is an immersive VR app so Horizon OS launches it into
+         the headset's VR compositor rather than as a 2D panel in the home environment. -->
+    <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="true" />
     <!-- CAMERA permission implies the camera feature; mark it optional so devices without a
          built-in camera HAL (e.g. Quest 2) can still install the app. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- Passthrough: lets the app show the real world behind the camera panel (mixed reality). -->
+    <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
+    <!-- Boundaryless: disables the Guardian boundary while this app runs, so walking around
+         doesn't trigger the "redraw your boundary" interruption. Allowed because the app is
+         passthrough-based (user can see the real world). Ignored on OS versions without it. -->
+    <uses-feature android:name="com.oculus.feature.BOUNDARYLESS_APP" android:required="false" />
+    <!-- Hand tracking: with VrInputSystemType.INTERACTION_SDK the panel can be used without a
+         controller (hand ray + pinch to click/drag). Normal permission — declaring it is enough,
+         no runtime request; hands still work only if enabled in the headset's system settings. -->
+    <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
+    <uses-feature android:name="oculus.software.handtracking" android:required="false" />
 
     <application android:allowBackup="true" android:icon="@android:drawable/sym_def_app_icon" android:roundIcon="@android:drawable/sym_def_app_icon" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.AstralProjector">
 
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden" android:launchMode="singleTask">
+        <!-- Horizon OS device support declaration (Quest 2 / 3 / 3S / Pro). -->
+        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|eureka" />
 
+        <!-- Declares the app handles system overlays/focus while immersive; required for passthrough
+             and for the panel to keep input focus in the compositor. -->
+        <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
+
+        <!-- ImmersiveActivity is the launcher. VRFeature inside it activates the Quest VR
+             compositor and head-pose tracking. MainActivity is hosted as a panel inside it. -->
+        <activity
+            android:name=".ImmersiveActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- Quest home screen category — required to appear in the app library. -->
+                <category android:name="com.oculus.intent.category.VR" />
             </intent-filter>
+        </activity>
 
-            <!-- Auto-launch / offer this app when a matching USB camera is attached.
-                 Both cameras share VID:PID so a single filter matches either one. -->
+        <!-- MainActivity runs as a 2D activity panel inside ImmersiveActivity, which launches it
+             onto the panel's virtual display. That requires android:allowEmbedded="true", and the
+             activity must NOT be singleTask/singleInstance (those launch modes can't be embedded on
+             a virtual display — doing so throws SecurityException "Permission Denial ... with
+             launchDisplayId"). USB_DEVICE_ATTACHED kept so the OS can still route attach events. -->
+        <activity android:name=".MainActivity" android:exported="true" android:allowEmbedded="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
             <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" android:resource="@xml/device_filter" />
         </activity>
+
     </application>
 
 </manifest>

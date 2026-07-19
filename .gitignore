@@ -10,4 +10,5 @@
 .externalNativeBuild/
 .cxx/
 build.log
-.claude/
+.claude/screenshots/
+screenshots/

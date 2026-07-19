@@ -4,6 +4,8 @@
 export JAVA_HOME := home_directory() / "Android/jdk-17.0.19+10"
 export ANDROID_HOME := home_directory() / "Android/Sdk"
 
+APP_ID := "com.compuglobal.astralprojector"
+
 # Default: show available recipes
 default:
     @just --list
@@ -79,16 +81,45 @@ build-release:
 install-debug:
     "$ANDROID_HOME/platform-tools/adb" install -r app/build/outputs/apk/debug/app-debug.apk
 
+# Uninstall the app from a connected device (ignores "not installed" errors)
+uninstall:
+    "$ANDROID_HOME/platform-tools/adb" uninstall {{APP_ID}} || true
+
+# Uninstall any existing build (e.g. signed with a different machine's debug
+# keystore, which fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE) then install fresh
+reinstall-debug: uninstall install-debug
+
 # Launch the app on a connected device
 run-debug:
-    "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.compuglobal.astralprojector -c android.intent.category.LAUNCHER 1
+    "$ANDROID_HOME/platform-tools/adb" shell monkey -p {{APP_ID}} -c android.intent.category.LAUNCHER 1
 
-# Build install and run
-refresh: build-debug install-debug run-debug
+# Grant required permissions (must re-run after every fresh install)
+# horizonos.* and WRITE_EXTERNAL_STORAGE cannot be granted via runtime dialog — ADB only.
+# MANAGE_EXTERNAL_STORAGE is an appop (not a pm permission) — lets recordings land in
+# /sdcard/Recordings instead of the app-private dir.
+grant-permissions:
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.CAMERA
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector horizonos.permission.USB_CAMERA
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.RECORD_AUDIO
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector horizonos.permission.HEADSET_CAMERA
+    "$ANDROID_HOME/platform-tools/adb" shell pm grant com.compuglobal.astralprojector android.permission.WRITE_EXTERNAL_STORAGE
+    "$ANDROID_HOME/platform-tools/adb" shell appops set --uid com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow
+
+# Build, install, grant permissions, and run
+refresh: build-debug install-debug grant-permissions run-debug
+
+# Build, uninstall any incompatible existing build, install, and run
+refresh-clean: build-debug reinstall-debug run-debug
 
 # List connected Android devices
 devices:
     "$ANDROID_HOME/platform-tools/adb" devices -l
+
+adb-tcp:
+    "$ANDROID_HOME/platform-tools/adb" tcpip 5555
+
+adb-tcp-connect ip:
+    "$ANDROID_HOME/platform-tools/adb" connect {{ ip }}:5555
 
 # Run unit tests
 test:
@@ -102,3 +133,106 @@ clean:
 env:
     @echo "JAVA_HOME=$JAVA_HOME"
     @echo "ANDROID_HOME=$ANDROID_HOME"
+
+# ---- App control (broadcast intents; app must be running) -----------------------
+
+PKG := "com.compuglobal.astralprojector"
+
+# Start recording
+app-record-start:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RECORD_START
+
+# Stop recording
+app-record-stop:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RECORD_STOP
+
+# Toggle recording (start if stopped, stop if started)
+app-record-toggle:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RECORD_TOGGLE
+
+# Open the settings panel
+app-settings:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.SETTINGS_OPEN
+
+# Reset all settings to defaults
+app-reset:
+    "$ANDROID_HOME/platform-tools/adb" shell am broadcast -a {{ PKG }}.RESET
+
+# Pull recordings to ./recordings/ (creates dir if needed)
+pull-recordings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="$ANDROID_HOME/platform-tools/adb"
+    mkdir -p recordings
+    "$ADB" pull /sdcard/Recordings/. recordings/ 2>/dev/null || \
+    "$ADB" pull /sdcard/Android/data/{{ PKG }}/files/Movies/. recordings/ 2>/dev/null || \
+    echo "No recordings found on device"
+
+# ---- Logging -------------------------------------------------------------------
+
+# Stream app logs live
+logs:
+    "$ANDROID_HOME/platform-tools/adb" logcat -s AstralProjector:V
+
+# Dump recent app logs (last 200 lines)
+logs-dump:
+    "$ANDROID_HOME/platform-tools/adb" logcat -d -s AstralProjector:V | tail -200
+
+# Pull the on-disk log file
+logs-pull:
+    "$ANDROID_HOME/platform-tools/adb" pull \
+        /sdcard/Android/data/{{ PKG }}/files/camera-eyes.log ./camera-eyes.log && \
+    cat ./camera-eyes.log
+
+# Capture the headset's mirror view (what the lenses show) and pull it to screenshots/ for preview.
+# Wakes the display first: screencap returns pure black while the headset's proximity sensor sleeps.
+screencap name="screencap":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="$ANDROID_HOME/platform-tools/adb"
+    mkdir -p screenshots
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.automation_disable > /dev/null
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.prox_close > /dev/null
+    sleep 4
+    OUT="screenshots/{{ name }}-$(date +%Y%m%d-%H%M%S).png"
+    "$ADB" exec-out screencap -p > "$OUT"
+    echo "Saved: $OUT"
+    echo "(If it came out black, the display hadn't woken yet — re-run.)"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open > /dev/null; then
+        xdg-open "$OUT" > /dev/null 2>&1 || true
+    fi
+
+# End-to-end curve test: drags the Curve slider to PCT on the in-headset panel via adb
+# (no controller needed), prints the app's reaction from logcat, then captures a screencap
+# for visual confirmation. Requires the immersive app to be running (just refresh).
+test-curve pct="85":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADB="$ANDROID_HOME/platform-tools/adb"
+    # Keep the VR session rendering while the headset sits on the desk.
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.automation_disable > /dev/null
+    "$ADB" shell am broadcast -a com.oculus.vrpowermanager.prox_close > /dev/null
+    # The panel (MainActivity) renders on the app's private virtual display.
+    find_panel_display() {
+        "$ADB" shell dumpsys display \
+            | grep -oE "displayId=[0-9]+, uniqueId='virtual" | grep -oE "[0-9]+" | head -1
+    }
+    DISP="$(find_panel_display)"
+    if [ -z "$DISP" ]; then
+        echo "Panel display not found; launching the immersive app..."
+        "$ADB" shell am start -n com.compuglobal.astralprojector/.ImmersiveActivity > /dev/null
+        sleep 12
+        DISP="$(find_panel_display)"
+    fi
+    [ -n "$DISP" ] || { echo "ERROR: panel virtual display not found — install/run the app first (just refresh)"; exit 1; }
+    echo "Panel is on virtual display $DISP"
+    # Curve slider track spans x=640..1280 at y=163 in the fixed 1920x960 panel layout
+    # (bounds from: adb shell uiautomator dump --display-id $DISP).
+    X=$(( 640 + (1280 - 640) * {{ pct }} / 100 ))
+    "$ADB" logcat -c
+    "$ADB" shell input -d "$DISP" swipe 640 163 "$X" 163 600
+    sleep 2
+    echo "--- app reaction (logcat) ---"
+    "$ADB" logcat -d -s AstralProjector:V | grep -iE "curve|cylinder|quad|radius" | tail -5 || true
+    echo "-----------------------------"
+    just screencap "curve-{{ pct }}"

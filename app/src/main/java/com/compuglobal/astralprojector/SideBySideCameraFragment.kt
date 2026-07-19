@@ -1,21 +1,39 @@
 package com.compuglobal.astralprojector
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Matrix
 import android.hardware.usb.UsbDevice
+import android.os.BatteryManager
+import android.os.Environment
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
+import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.MultiCameraFragment
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
+import com.jiangdg.ausbc.callback.ICaptureCallBack
 import com.jiangdg.ausbc.camera.bean.CameraRequest
 import com.jiangdg.ausbc.camera.bean.PreviewSize
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Shows up to two UVC cameras side-by-side.
@@ -65,6 +83,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var aspectMode = AspectMode.STRETCH
     private var aspectToggle: TextView? = null
 
+    // Video orientation, user-controlled (persisted). rotationDeg snaps to 0/90/180/270 and
+    // flipH mirrors horizontally. Together they cover all 8 orientations, so the correct one
+    // can always be dialed in on-device without recompiling.
+    private var rotationDeg = 0
+    private var flipH = false
+    private var rotationToggle: TextView? = null
+    private var flipToggle: TextView? = null
+
     // Which display pane (texture/status view) each logical connection slot renders into.
     // Left/right depends on hub port, not on which physical camera unit connected, so this
     // lets the user correct it on-screen. Swapping redirects the already-open camera's render
@@ -77,38 +103,162 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private lateinit var textures: Array<AspectRatioTextureView>
     private lateinit var statuses: Array<TextView>
 
+    // Per-display-pane enable state (0 = left, 1 = right), toggled by the settings-menu checkboxes
+    // and persisted. A disabled pane's camera is closed and its container collapsed so the remaining
+    // enabled pane fills the view; both disabled -> both panes show "Camera off". Indexed by display
+    // pane so it stays intuitive under a swap. Mono only — in stereo each eye is a fixed half, so the
+    // array stays [true, true] and the gating below is inert.
+    private val enabled = booleanArrayOf(true, true)
+    private lateinit var panes: Array<View>
+    private var enableChecks: Array<CheckBox>? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var dumps = 0
+
+    /** Background thread for the periodic state dump; quit on view teardown. */
+    private var dumpThread: HandlerThread? = null
+
+    // Debounce timestamp for thumbstick-driven focus movement in the settings menu.
+    private var lastStickMove = 0L
+
+    // Cached application context for resource lookups from lifecycle-independent callbacks.
+    private var appCtx: Context? = null
+
+    /** Resolve a string resource via the application context — never throws if detached. */
+    private fun str(resId: Int, vararg args: Any): String {
+        val c = appCtx ?: context?.applicationContext ?: return ""
+        return if (args.isEmpty()) c.getString(resId) else c.getString(resId, *args)
+    }
 
     // On-screen log overlay (retrievable without ADB or a card reader).
     private var logText: TextView? = null
     private var logScroll: ScrollView? = null
+    private var logOverlay: View? = null
     private val logLines = ArrayDeque<String>()
+
+    /** True when logLines changed while the overlay was hidden, so its text needs a rebuild. */
+    private var logTextStale = false
+
+    // Settings controls row (toggled by the gear button; hidden by default).
+    private var settingsList: ViewGroup? = null
+    private var settingsScroll: View? = null
+    private var settingsScrim: View? = null
+    private var settingsToggle: TextView? = null
+    private var statusReadout: TextView? = null
+    private var statusReadoutLeft: TextView? = null
+    private var statusReadoutRight: TextView? = null
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+    /** Transparent spacer between the panes; its layout weight sets the passthrough gap. */
+    private var gapSpacer: View? = null
+
+    // Recording: each open USB camera records itself via AUSBC's captureVideoStart (H.264 + mic
+    // AAC -> MP4). Not persisted — recording never survives a relaunch.
+    private var recording = false
+    private var recordToggle: TextView? = null
+    private var compositeMode = false
+    private var compositeToggle: TextView? = null
+    private var compositeRecorder: CompositeRecorder? = null
+    private var passthroughRecorder: PassthroughRecorder? = null
+
+    // AUSBC's Mp4Muxer only starts once BOTH its video and audio tracks arrive, so without the
+    // mic permission the per-camera files would stay empty forever — request it on first Record.
+    private val audioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            FileLogger.log("record: RECORD_AUDIO request -> granted=$granted")
+            startRecording(audioGranted = granted)
+        }
+
+    // Snapshot of the stereo pref at view creation. The panel (and with it this fragment) is
+    // recreated whenever the pref flips, so the flag is stable for the view's lifetime: in stereo
+    // all full-width overlays stay hidden (each eye sees only half the surface, so a full-width
+    // UI would show a different half to each eye). A duplicated per-eye settings column
+    // (gear button / MENU / Y) exposes scale, gap, swap and exit; B/BACK drops back to mono.
+    private var stereoOn = false
+
+    // Stereo-only controls: a compact settings column duplicated once per half at identical
+    // positions so the eyes fuse the two copies into one menu. The list holds the two half
+    // containers (left first — controller focus navigation runs on the left copy).
+    private var stereoOverlay: View? = null
+    private var stereoGearRow: View? = null
+    private var stereoHalves: List<View> = emptyList()
+
+    // Head-tracked menu cursor (driven by HeadCursorSystem via HeadCursorBridge). A ~60Hz ticker
+    // (idle-polls slower) opens/closes a session on the shake gesture, moves the reticle to the
+    // gaze/panel intersection, and dwell-clicks buttons.
+    private var crosshairView: CrosshairView? = null
+    private var headCursorActive = false
+    private var lastGestureEpoch = 0
+    // The button the reticle is currently over, and when it landed there (for the dwell timer).
+    private var hoverTarget: View? = null
+    private var hoverStartMs = 0L
+    // A target already dwell-clicked stays disarmed until the reticle leaves it (no auto-repeat).
+    private var hoverArmedTarget: View? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
+        // Cache the application context so status-string lookups from AUSBC camera callbacks don't
+        // crash with "Fragment not attached" when the panel is detached (e.g. immersive app
+        // backgrounded) while cameras keep streaming and firing state callbacks.
+        appCtx = inflater.context.applicationContext
         val root = inflater.inflate(R.layout.fragment_side_by_side, container, false)
         textures = arrayOf(root.findViewById(R.id.textureLeft), root.findViewById(R.id.textureRight))
         statuses = arrayOf(root.findViewById(R.id.statusLeft), root.findViewById(R.id.statusRight))
+        panes = arrayOf(root.findViewById(R.id.paneLeft), root.findViewById(R.id.paneRight))
 
         logScroll = root.findViewById(R.id.logScroll)
         logText = root.findViewById(R.id.logText)
+        logOverlay = root.findViewById(R.id.logOverlay)
         val logToggle = root.findViewById<TextView>(R.id.logToggle)
-        logToggle.setOnClickListener {
-            val show = logScroll?.visibility != View.VISIBLE
-            logScroll?.visibility = if (show) View.VISIBLE else View.GONE
-            logToggle.text = getString(if (show) R.string.log_hide else R.string.log_show)
+        val logClose = root.findViewById<TextView>(R.id.logClose)
+        val setLogVisible = { show: Boolean ->
+            logOverlay?.visibility = if (show) View.VISIBLE else View.GONE
+            if (show) refreshLogText()
+            logToggle.text = str(if (show) R.string.log_hide else R.string.log_show)
         }
+        logToggle.setOnClickListener {
+            setLogVisible(logOverlay?.visibility != View.VISIBLE)
+        }
+        logClose.setOnClickListener { setLogVisible(false) }
+
+        // Gear button toggles the (transparent) controls row, which is hidden by default.
+        settingsList = root.findViewById(R.id.settingsList)
+        settingsScroll = root.findViewById(R.id.settingsScroll)
+        settingsScrim = root.findViewById(R.id.settingsScrim)
+        settingsScrim?.setOnClickListener { setSettingsVisible(false) }
+        val settingsBtn = root.findViewById<TextView>(R.id.settingsToggle)
+        settingsToggle = settingsBtn
+        settingsBtn.setOnClickListener { toggleSettings() }
+        root.findViewById<TextView>(R.id.resetButton).setOnClickListener { resetAllSettings() }
+
+        // Clock + battery readout, left of the settings button. Re-posts itself once a second via
+        // mainHandler, which onDestroyView already clears (removeCallbacksAndMessages(null)).
+        statusReadout = root.findViewById(R.id.statusReadout)
+        statusReadoutLeft = root.findViewById(R.id.statusReadoutLeft)
+        statusReadoutRight = root.findViewById(R.id.statusReadoutRight)
+        startStatusReadoutTicker()
+
+        // Head cursor: clear any stale session state left over from a previous panel instance (a
+        // stereo toggle / recreation replaces this fragment) so head-follow isn't stuck paused,
+        // then start the ticker that reacts to the shake gesture and drives the reticle.
+        crosshairView = root.findViewById(R.id.crosshair)
+        HeadCursorBridge.reset()
+        lastGestureEpoch = HeadCursorBridge.gestureEpoch
+        startHeadCursorTicker()
+
+        root.findViewById<TextView>(R.id.buildTimestamp).text =
+            str(R.string.build_time_label,
+                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(BuildConfig.BUILD_TIME)))
 
         aspectMode = loadAspectMode()
         val aspectBtn = root.findViewById<TextView>(R.id.aspectToggle)
         aspectToggle = aspectBtn
-        aspectBtn.text = getString(aspectMode.labelRes)
+        aspectBtn.text = str(aspectMode.labelRes)
         aspectBtn.setOnClickListener {
             aspectMode = AspectMode.values()[(aspectMode.ordinal + 1) % AspectMode.values().size]
             FileLogger.log("aspect mode -> $aspectMode")
             saveAspectMode(aspectMode)
-            aspectBtn.text = getString(aspectMode.labelRes)
+            aspectBtn.text = str(aspectMode.labelRes)
             applyAspectToAll()
         }
 
@@ -116,6 +266,170 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         root.findViewById<TextView>(R.id.swapToggle).setOnClickListener {
             performSwap()
         }
+
+        // Per-camera enable checkboxes. Mono only: in stereo each eye is a fixed half of the
+        // surface, so `enabled` stays [true, true] and both panes always render.
+        if (!stereoOn) {
+            loadEnabled()
+            val checks = arrayOf(
+                root.findViewById<CheckBox>(R.id.enableLeft),
+                root.findViewById<CheckBox>(R.id.enableRight),
+            )
+            enableChecks = checks
+            checks.forEachIndexed { displayIdx, cb ->
+                cb.isChecked = enabled[displayIdx]
+                cb.setOnCheckedChangeListener { _, isChecked -> setPaneEnabled(displayIdx, isChecked) }
+            }
+            updatePaneVisibility()
+        }
+
+        // Rotation: cycles 0 -> 90 -> 180 -> 270 (snaps to the four orientations).
+        rotationDeg = loadRotation()
+        val rotationBtn = root.findViewById<TextView>(R.id.rotationToggle)
+        rotationToggle = rotationBtn
+        rotationBtn.text = str(R.string.rotation_label, rotationDeg)
+        rotationBtn.setOnClickListener {
+            rotationDeg = (rotationDeg + 90) % 360
+            FileLogger.log("rotation -> $rotationDeg")
+            saveRotation(rotationDeg)
+            rotationBtn.text = str(R.string.rotation_label, rotationDeg)
+            applyAspectToAll()
+        }
+
+        // Horizontal flip: mirrors the video left/right. Combined with rotation this covers all
+        // eight possible orientations, so the correct one can always be set on-device.
+        flipH = loadFlipH()
+        val flipBtn = root.findViewById<TextView>(R.id.flipToggle)
+        flipToggle = flipBtn
+        flipBtn.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off)
+        flipBtn.setOnClickListener {
+            flipH = !flipH
+            FileLogger.log("flipH -> $flipH")
+            saveFlipH(flipH)
+            flipBtn.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off)
+            applyAspectToAll()
+        }
+
+        // Head-follow toggle. The fragment lives inside MainActivity (the panel), so it can't
+        // reach ImmersiveActivity directly — instead it flips the shared preference, which
+        // ImmersiveActivity observes via a change listener and applies to the panel's Followable.
+        val followBtn = root.findViewById<TextView>(R.id.headFollowToggle)
+        val initialFollow = SpatialControls.isHeadFollowEnabled(requireContext())
+        followBtn.text = str(if (initialFollow) R.string.head_follow_on else R.string.head_follow_off)
+        followBtn.setOnClickListener {
+            val next = !SpatialControls.isHeadFollowEnabled(requireContext())
+            SpatialControls.setHeadFollowEnabled(requireContext(), next)
+            followBtn.text = str(if (next) R.string.head_follow_on else R.string.head_follow_off)
+            FileLogger.log("headFollow -> $next")
+        }
+
+        // Smoothing toggle. Like head-follow, it just persists a preference that ImmersiveActivity
+        // observes and applies to the HeadFollowSystem's interpolation.
+        val smoothBtn = root.findViewById<TextView>(R.id.smoothingToggle)
+        val initialSmooth = SpatialControls.isSmoothingEnabled(requireContext())
+        smoothBtn.text = str(if (initialSmooth) R.string.smoothing_on else R.string.smoothing_off)
+        smoothBtn.setOnClickListener {
+            val next = !SpatialControls.isSmoothingEnabled(requireContext())
+            SpatialControls.setSmoothingEnabled(requireContext(), next)
+            smoothBtn.text = str(if (next) R.string.smoothing_on else R.string.smoothing_off)
+            FileLogger.log("smoothing -> $next")
+        }
+
+        // Passthrough toggle. Persists a preference that ImmersiveActivity observes and applies via
+        // scene.enablePassthrough — turning the mixed-reality background on/off live.
+        val passthroughBtn = root.findViewById<TextView>(R.id.passthroughToggle)
+        val initialPassthrough = SpatialControls.isPassthroughEnabled(requireContext())
+        passthroughBtn.text = str(if (initialPassthrough) R.string.passthrough_on else R.string.passthrough_off)
+        passthroughBtn.setOnClickListener {
+            val next = !SpatialControls.isPassthroughEnabled(requireContext())
+            SpatialControls.setPassthroughEnabled(requireContext(), next)
+            passthroughBtn.text = str(if (next) R.string.passthrough_on else R.string.passthrough_off)
+            FileLogger.log("passthrough -> $next")
+        }
+
+        // Binocular mode: left camera -> left eye, right camera -> right eye. Writing the pref
+        // makes ImmersiveActivity recreate the panel with StereoMode.LeftRight, which finishes
+        // and relaunches this fragment's activity — so the button only ever turns stereo ON
+        // (the settings menu is unreachable while stereo is active; MENU/Y exits instead).
+        stereoOn = SpatialControls.isStereoEnabled(requireContext())
+        root.findViewById<TextView>(R.id.stereoToggle).setOnClickListener {
+            FileLogger.log("stereo toggle tapped -> on (panel will recreate)")
+            // Each eye only sees half the surface, so stereo wants a larger panel — default it to 150%.
+            SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_STEREO_SCALE)
+            SpatialControls.setStereoEnabled(requireContext(), true)
+        }
+
+        recordToggle = root.findViewById(R.id.recordToggle)
+        recordToggle?.setOnClickListener { toggleRecording() }
+
+        compositeMode = loadCompositeMode()
+        val compositeBtn = root.findViewById<TextView>(R.id.compositeToggle)
+        compositeToggle = compositeBtn
+        compositeBtn.text = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate)
+        compositeBtn.setOnClickListener {
+            compositeMode = !compositeMode
+            saveCompositeMode(compositeMode)
+            compositeBtn.text = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate)
+            FileLogger.log("record mode -> ${if (compositeMode) "composite" else "separate"}")
+        }
+
+        // Curve slider: 0..100% maps directly to curve amount 0.0..1.0 (flat -> cylinder).
+        val curveLabel = root.findViewById<TextView>(R.id.curveLabel)
+        val curveSlider = root.findViewById<SeekBar>(R.id.curveSlider)
+        val initialCurvePct = (SpatialControls.getPanelCurve(requireContext()) * 100f).toInt()
+        curveSlider.progress = initialCurvePct
+        curveLabel.text = str(R.string.curve_label, initialCurvePct)
+        curveSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                curveLabel.text = str(R.string.curve_label, progress)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            // Curvature is applied via a panel mesh rebuild (reshape) — doing that on every
+            // progress tick tears down the surface the pointer ray is hit-testing against
+            // mid-drag, so only commit once the drag ends.
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                SpatialControls.setPanelCurve(requireContext(), sb.progress / 100f)
+                FileLogger.log("curve -> ${sb.progress}%")
+            }
+        })
+
+        // Scale slider: 0..100% maps to panel scale MIN_PANEL_SCALE..MAX_PANEL_SCALE.
+        val scaleLabel = root.findViewById<TextView>(R.id.scaleLabel)
+        val scaleSlider = root.findViewById<SeekBar>(R.id.scaleSlider)
+        val initialScale = SpatialControls.getPanelScale(requireContext())
+        scaleSlider.progress = scaleToProgress(initialScale)
+        scaleLabel.text = str(R.string.scale_label, (initialScale * 100f).toInt())
+        scaleSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                val scale = progressToScale(progress)
+                scaleLabel.text = str(R.string.scale_label, (scale * 100f).toInt())
+                if (fromUser) SpatialControls.setPanelScale(requireContext(), scale)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
+
+        // Gap slider: 0..100% maps to the transparent spacer's layout weight, widening the
+        // passthrough-visible gap between the two panes (100% = gap takes half the row width).
+        // Pure view layout — cheap enough to apply live on every progress tick.
+        gapSpacer = root.findViewById(R.id.gapSpacer)
+        val gapLabel = root.findViewById<TextView>(R.id.gapLabel)
+        val gapSlider = root.findViewById<SeekBar>(R.id.gapSlider)
+        val initialGap = loadGapPct()
+        gapSlider.progress = initialGap
+        gapLabel.text = str(R.string.gap_label, initialGap)
+        applyGap(initialGap)
+        gapSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                gapLabel.text = str(R.string.gap_label, progress)
+                if (fromUser) {
+                    applyGap(progress)
+                    saveGapPct(progress)
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
         // Pane size settles after first layout (and can change); recompute the transform then.
         // displayIndexFor is its own inverse, so it also maps a display index back to whichever
         // logical slot currently renders into it.
@@ -131,20 +445,374 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             FileLogger.log("manual permission retry tapped")
             retryAllPendingPermissions()
         }
+
+        if (stereoOn) {
+            root.findViewById<View>(R.id.topBar)?.visibility = View.GONE
+            root.findViewById<View>(R.id.curveTile)?.visibility = View.GONE
+            settingsScroll?.visibility = View.GONE
+            settingsScrim?.visibility = View.GONE
+            logOverlay?.visibility = View.GONE
+            wireStereoSettings(root)
+            FileLogger.log("stereo mode active: per-eye settings wired, B/BACK exits to mono")
+        }
         // Stream every log line (including ones buffered before now) to the overlay.
         FileLogger.setListener { line -> appendLog(line) }
         return root
     }
 
+    /**
+     * Wires the stereo-only controls: a gear button and a compact settings column (scale, gap,
+     * swap, exit), each duplicated once per half of the surface so both eyes see an identical,
+     * fusable copy. Acting on either copy commits the change and mirrors the other copy's state.
+     */
+    private fun wireStereoSettings(root: View) {
+        stereoOverlay = root.findViewById(R.id.stereoOverlay)
+        stereoGearRow = root.findViewById<View>(R.id.stereoGearRow).also { it.visibility = View.VISIBLE }
+        val halves = listOf<View>(
+            root.findViewById(R.id.stereoHalfLeft),
+            root.findViewById(R.id.stereoHalfRight),
+        )
+        stereoHalves = halves
+        listOf<TextView>(root.findViewById(R.id.stereoGearLeft), root.findViewById(R.id.stereoGearRight))
+            .forEach { gear -> gear.setOnClickListener { toggleSettings() } }
+        // Exit lives next to the gear (mirroring how Enable Stereo sits next to Settings in mono),
+        // so leaving stereo doesn't require opening the menu first.
+        listOf<TextView>(root.findViewById(R.id.stereoExitLeft), root.findViewById(R.id.stereoExitRight))
+            .forEach { exit ->
+                exit.setOnClickListener {
+                    FileLogger.log("exit stereo tapped -> mono (panel will recreate)")
+                    // Undo the 150% stereo default so mono comes back at its own 100% default.
+                    SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_PANEL_SCALE)
+                    SpatialControls.setStereoEnabled(requireContext(), false)
+                }
+            }
+
+        val ctx = requireContext()
+        val scaleSliders = halves.map { it.findViewById<SeekBar>(R.id.stScaleSlider) }
+        val scaleLabels = halves.map { it.findViewById<TextView>(R.id.stScaleLabel) }
+        val gapSliders = halves.map { it.findViewById<SeekBar>(R.id.stGapSlider) }
+        val gapLabels = halves.map { it.findViewById<TextView>(R.id.stGapLabel) }
+
+        val initialScale = SpatialControls.getPanelScale(ctx)
+        val initialGap = loadGapPct()
+        scaleSliders.forEach { it.progress = scaleToProgress(initialScale) }
+        scaleLabels.forEach { it.text = str(R.string.scale_label, (initialScale * 100f).toInt()) }
+        gapSliders.forEach { it.progress = initialGap }
+        gapLabels.forEach { it.text = str(R.string.gap_label, initialGap) }
+
+        scaleSliders.forEachIndexed { i, slider ->
+            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                    val scale = progressToScale(progress)
+                    scaleLabels.forEach { it.text = str(R.string.scale_label, (scale * 100f).toInt()) }
+                    if (fromUser) {
+                        SpatialControls.setPanelScale(requireContext(), scale)
+                        // Mirror the other eye's copy (programmatic setProgress won't recurse:
+                        // it arrives with fromUser = false).
+                        scaleSliders[1 - i].progress = progress
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) = Unit
+                override fun onStopTrackingTouch(sb: SeekBar) = Unit
+            })
+        }
+        gapSliders.forEachIndexed { i, slider ->
+            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
+                    gapLabels.forEach { it.text = str(R.string.gap_label, progress) }
+                    if (fromUser) {
+                        applyGap(progress)
+                        saveGapPct(progress)
+                        gapSliders[1 - i].progress = progress
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) = Unit
+                override fun onStopTrackingTouch(sb: SeekBar) = Unit
+            })
+        }
+        // Toggle rows duplicated per eye. Each acts on shared state, then refreshes BOTH copies'
+        // labels so the fused menu stays consistent. Curve is deliberately absent — stereo is a
+        // flat quad (ImmersiveActivity.applyPanelCurve early-returns while stereo is on).
+        val rotationBtns = halves.map { it.findViewById<TextView>(R.id.stRotation) }
+        rotationBtns.forEach { it.text = str(R.string.rotation_label, rotationDeg) }
+        rotationBtns.forEach { btn ->
+            btn.setOnClickListener {
+                rotationDeg = (rotationDeg + 90) % 360
+                saveRotation(rotationDeg)
+                applyAspectToAll()
+                rotationBtns.forEach { it.text = str(R.string.rotation_label, rotationDeg) }
+                FileLogger.log("stereo rotation -> $rotationDeg")
+            }
+        }
+
+        val flipBtns = halves.map { it.findViewById<TextView>(R.id.stFlip) }
+        flipBtns.forEach { it.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off) }
+        flipBtns.forEach { btn ->
+            btn.setOnClickListener {
+                flipH = !flipH
+                saveFlipH(flipH)
+                applyAspectToAll()
+                flipBtns.forEach { it.text = str(if (flipH) R.string.flip_h_on else R.string.flip_h_off) }
+                FileLogger.log("stereo flipH -> $flipH")
+            }
+        }
+
+        val aspectBtns = halves.map { it.findViewById<TextView>(R.id.stAspect) }
+        aspectBtns.forEach { it.text = str(aspectMode.labelRes) }
+        aspectBtns.forEach { btn ->
+            btn.setOnClickListener {
+                aspectMode = AspectMode.values()[(aspectMode.ordinal + 1) % AspectMode.values().size]
+                saveAspectMode(aspectMode)
+                applyAspectToAll()
+                aspectBtns.forEach { it.text = str(aspectMode.labelRes) }
+                FileLogger.log("stereo aspect -> $aspectMode")
+            }
+        }
+
+        val followBtns = halves.map { it.findViewById<TextView>(R.id.stFollow) }
+        followBtns.forEach { it.text = str(if (SpatialControls.isHeadFollowEnabled(ctx)) R.string.head_follow_on else R.string.head_follow_off) }
+        followBtns.forEach { btn ->
+            btn.setOnClickListener {
+                val next = !SpatialControls.isHeadFollowEnabled(requireContext())
+                SpatialControls.setHeadFollowEnabled(requireContext(), next)
+                followBtns.forEach { it.text = str(if (next) R.string.head_follow_on else R.string.head_follow_off) }
+                FileLogger.log("stereo headFollow -> $next")
+            }
+        }
+
+        val smoothBtns = halves.map { it.findViewById<TextView>(R.id.stSmoothing) }
+        smoothBtns.forEach { it.text = str(if (SpatialControls.isSmoothingEnabled(ctx)) R.string.smoothing_on else R.string.smoothing_off) }
+        smoothBtns.forEach { btn ->
+            btn.setOnClickListener {
+                val next = !SpatialControls.isSmoothingEnabled(requireContext())
+                SpatialControls.setSmoothingEnabled(requireContext(), next)
+                smoothBtns.forEach { it.text = str(if (next) R.string.smoothing_on else R.string.smoothing_off) }
+                FileLogger.log("stereo smoothing -> $next")
+            }
+        }
+
+        val passthroughBtns = halves.map { it.findViewById<TextView>(R.id.stPassthrough) }
+        passthroughBtns.forEach { it.text = str(if (SpatialControls.isPassthroughEnabled(ctx)) R.string.passthrough_on else R.string.passthrough_off) }
+        passthroughBtns.forEach { btn ->
+            btn.setOnClickListener {
+                val next = !SpatialControls.isPassthroughEnabled(requireContext())
+                SpatialControls.setPassthroughEnabled(requireContext(), next)
+                passthroughBtns.forEach { it.text = str(if (next) R.string.passthrough_on else R.string.passthrough_off) }
+                FileLogger.log("stereo passthrough -> $next")
+            }
+        }
+
+        halves.forEach { half ->
+            half.findViewById<TextView>(R.id.stSwap).setOnClickListener { performSwap() }
+        }
+
+        // Record start/stop, duplicated per eye like everything else; updateRecordLabels()
+        // refreshes both copies (and the hidden mono button) whenever the state flips.
+        halves.forEach { half ->
+            half.findViewById<TextView>(R.id.stRecord).setOnClickListener { toggleRecording() }
+        }
+
+        val compositeBtns = halves.map { it.findViewById<TextView>(R.id.stCompositeMode) }
+        compositeBtns.forEach { it.text = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate) }
+        compositeBtns.forEach { btn ->
+            btn.setOnClickListener {
+                compositeMode = !compositeMode
+                saveCompositeMode(compositeMode)
+                val label = str(if (compositeMode) R.string.record_mode_composite else R.string.record_mode_separate)
+                compositeBtns.forEach { it.text = label }
+                compositeToggle?.text = label
+                FileLogger.log("stereo record mode -> ${if (compositeMode) "composite" else "separate"}")
+            }
+        }
+    }
+
+    // --- recording ---------------------------------------------------------------
+
+    private fun toggleRecording() {
+        if (recording) { stopRecording(); return }
+        // Composite mode is video-only (no AudioRecord needed), so skip the audio-permission check.
+        if (compositeMode) { startRecording(audioGranted = false); return }
+        val ctx = context ?: return
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startRecording(audioGranted = true)
+        } else {
+            FileLogger.log("record: requesting RECORD_AUDIO")
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    /**
+     * Starts recording. Two modes:
+     *
+     * **Separate** (default): one MP4 per open USB camera via AUSBC (H.264 + mic AAC).
+     * Requires WRITE_EXTERNAL_STORAGE (pm-granted) — AUSBC's gate — and RECORD_AUDIO.
+     * Files: REC_<ts>_{left,right}.mp4
+     *
+     * **Composite**: a single side-by-side MP4 captured from both TextureViews via MediaCodec
+     * (H.264, video-only — adding a third AudioRecord alongside AUSBC's two is risky on Quest).
+     * No WRITE_EXTERNAL_STORAGE or RECORD_AUDIO needed.
+     * File: REC_<ts>_composite.mp4
+     *
+     * Either mode also attempts passthrough recording (Quest 3/3S + Horizon OS v74+ only;
+     * silently skipped on Quest 2).
+     * All files land in /sdcard/Recordings or the app-private Movies dir.
+     */
+    private fun startRecording(audioGranted: Boolean) {
+        if (recording) return
+        val ctx = appCtx ?: context?.applicationContext ?: return
+        val dir = recordingsDir(ctx)
+        val base = "REC_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+
+        if (compositeMode) {
+            val cr = compositeRecorder ?: CompositeRecorder(ctx).also { compositeRecorder = it }
+            val left = textures[displayIndexFor(0)]
+            val right = textures[displayIndexFor(1)]
+            if (!cr.start(File(dir, "${base}_composite.mp4"), left, right)) {
+                FileLogger.log("record: composite recorder failed to start")
+                return
+            }
+        } else {
+            // AUSBC's captureVideoStartInternal bails out (onError, no file ever created) unless
+            // checkSelfPermission(WRITE_EXTERNAL_STORAGE) passes — even though scoped storage makes
+            // the permission itself meaningless. It can't be granted via a runtime dialog on
+            // targetSdk 30+ (auto-denied); it must be pm-granted like the other recording perms.
+            val storageGranted = ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!storageGranted) {
+                FileLogger.log(
+                    "record: WRITE_EXTERNAL_STORAGE not granted — AUSBC refuses per-camera recording. " +
+                        "Fix: adb shell pm grant com.compuglobal.astralprojector " +
+                        "android.permission.WRITE_EXTERNAL_STORAGE"
+                )
+                return
+            }
+            if (!audioGranted) {
+                FileLogger.log("record: RECORD_AUDIO denied — AUSBC's muxer stalls without the mic track")
+                return
+            }
+            var started = 0
+            for (idx in 0 until SLOT_COUNT) {
+                val cam = slots[idx] ?: continue
+                if (!runCatching { cam.isCameraOpened() }.getOrDefault(false)) continue
+                val side = if (displayIndexFor(idx) == 0) "left" else "right"
+                // Mp4Muxer appends ".mp4" itself, so the path is passed extension-less.
+                val path = File(dir, "${base}_$side").absolutePath
+                FileLogger.log("record: start slot=$idx ($side) -> $path.mp4")
+                runCatching { cam.captureVideoStart(recordCallback(side), path, 0L) }
+                    .onFailure { FileLogger.log("record: captureVideoStart($side) FAILED", it) }
+                    .onSuccess { started++ }
+            }
+            if (started == 0) {
+                FileLogger.log("record: no open USB camera to record")
+                return
+            }
+        }
+
+        // Passthrough recording: Quest 3/3S + Horizon OS v74+ only. Any failure (missing
+        // permission, no camera2 devices on Quest 2, API not present) is caught and logged so
+        // it never blocks the recordings above.
+        runCatching {
+            val pt = passthroughRecorder ?: PassthroughRecorder(ctx).also { passthroughRecorder = it }
+            pt.start(File(dir, "${base}_passthrough.mp4"))
+        }.onFailure { FileLogger.log("record: passthrough recorder failed to start", it) }
+
+        recording = true
+        updateRecordLabels()
+    }
+
+    private fun stopRecording() {
+        if (!recording) return
+        FileLogger.log("record: stop (mode=${if (compositeMode) "composite" else "separate"})")
+        if (compositeMode) {
+            runCatching { compositeRecorder?.stop() }
+                .onFailure { FileLogger.log("record: composite stop failed", it) }
+        } else {
+            // captureVideoStop on a camera that isn't recording is a no-op, so blanket-stop all slots.
+            slots.forEach { cam -> runCatching { cam?.captureVideoStop() } }
+        }
+        runCatching { passthroughRecorder?.stop() }
+            .onFailure { FileLogger.log("record: passthrough stop failed", it) }
+        recording = false
+        updateRecordLabels()
+    }
+
+    /**
+     * Where recordings land. Preferred: the shared /sdcard/Recordings folder — "This headset /
+     * Recordings" in the Quest Files app — which needs the MANAGE_EXTERNAL_STORAGE appop
+     * (`adb shell appops set --uid com.compuglobal.astralprojector MANAGE_EXTERNAL_STORAGE allow`;
+     * scoped storage allows no other write path there for video files). Without the grant, falls
+     * back to the app-private Movies dir (Android/data/<pkg>/files/Movies), which needs no
+     * permission but is only reachable via adb/MTP.
+     */
+    private fun recordingsDir(ctx: Context): File {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+            Environment.isExternalStorageManager()
+        ) {
+            val shared = File(Environment.getExternalStorageDirectory(), "Recordings")
+            if (shared.isDirectory || shared.mkdirs()) return shared
+            FileLogger.log("record: shared dir $shared not creatable; falling back to app dir")
+        } else {
+            FileLogger.log("record: no all-files access (adb: appops set --uid <pkg> MANAGE_EXTERNAL_STORAGE allow) — using app-private dir")
+        }
+        return ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: ctx.filesDir
+    }
+
+    /** AUSBC invokes these on the main thread (Mp4Muxer marshals via its main handler). */
+    private fun recordCallback(side: String) = object : ICaptureCallBack {
+        override fun onBegin() = FileLogger.log("record($side): began")
+        override fun onError(error: String?) = FileLogger.log("record($side): ERROR ${error ?: "unknown"}")
+        override fun onComplete(path: String?) {
+            FileLogger.log("record($side): saved $path")
+            // Register with MediaStore so the Files app / gallery sees it without a reboot.
+            path?.let { scanRecording(it) }
+        }
+    }
+
+    private fun scanRecording(path: String) {
+        val ctx = appCtx ?: return
+        android.media.MediaScannerConnection.scanFile(ctx, arrayOf(path), null, null)
+    }
+
+    private fun updateRecordLabels() {
+        val label = str(if (recording) R.string.record_stop else R.string.record_start)
+        recordToggle?.text = label
+        stereoHalves.forEach { it.findViewById<TextView>(R.id.stRecord)?.text = label }
+    }
+
     /** FileLogger invokes this from arbitrary threads; marshal to the UI thread. */
     private fun appendLog(line: String) {
         mainHandler.post {
-            val tv = logText ?: return@post
             logLines.addLast(line)
-            while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
-            tv.text = logLines.joinToString("\n")
+            var trimmed = false
+            while (logLines.size > MAX_LOG_LINES) { logLines.removeFirst(); trimmed = true }
+            val tv = logText ?: return@post
+            // While the overlay is hidden, only the deque is maintained — rebuilding a ~400-line
+            // string and re-laying-out the TextView per log line is main-thread work for nothing.
+            if (logOverlay?.visibility != View.VISIBLE) {
+                logTextStale = true
+                return@post
+            }
+            if (logTextStale || trimmed) {
+                tv.text = logLines.joinToString("\n")
+                logTextStale = false
+            } else {
+                if (tv.text.isNotEmpty()) tv.append("\n")
+                tv.append(line)
+            }
             logScroll?.post { logScroll?.fullScroll(View.FOCUS_DOWN) }
         }
+    }
+
+    /** Rebuilds the overlay text from the deque if lines arrived while it was hidden. */
+    private fun refreshLogText() {
+        val tv = logText ?: return
+        if (!logTextStale) return
+        tv.text = logLines.joinToString("\n")
+        logTextStale = false
+        logScroll?.post { logScroll?.fullScroll(View.FOCUS_DOWN) }
     }
 
     override fun initView() {
@@ -158,7 +826,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val d = camera.getUsbDevice()
         FileLogger.log("onCameraAttached ${desc(d)} hasPermission=${safeHasPermission(d)} mapSize=${getCameraMap().size}")
         val idx = firstFreeSlot()
-        if (idx >= 0) setStatus(displayIndexFor(idx), getString(R.string.status_connecting))
+        if (idx >= 0) setStatus(displayIndexFor(idx), str(R.string.status_connecting))
     }
 
     override fun onCameraDetached(camera: MultiCameraClient.Camera) {
@@ -167,7 +835,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         if (idx >= 0) {
             slots[idx] = null
             videoSizes[idx] = null
-            setStatus(displayIndexFor(idx), getString(R.string.status_waiting))
+            setStatus(displayIndexFor(idx), str(R.string.status_waiting))
         }
         runCatching { camera.closeCamera() }.onFailure { FileLogger.log("closeCamera(detach) failed", it) }
     }
@@ -178,20 +846,27 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val idx = firstFreeSlot()
         if (idx < 0) {
             FileLogger.log("no free slot; ignoring extra camera ${desc(d)}")
-            setStatus(SLOT_COUNT - 1, getString(R.string.status_extra))
+            setStatus(SLOT_COUNT - 1, str(R.string.status_extra))
             runCatching { camera.closeCamera() }
             return
         }
         slots[idx] = camera
         camera.setCameraStateCallBack(this)
         val displayIdx = displayIndexFor(idx)
-        try {
-            FileLogger.log("openCamera slot=$idx display=$displayIdx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
-            camera.openCamera(textures[displayIdx], buildRequest())
-            setStatus(displayIdx, getString(R.string.status_opening))
-        } catch (t: Throwable) {
-            FileLogger.log("openCamera slot=$idx FAILED", t)
-            setStatus(displayIdx, getString(R.string.status_error, t.message ?: "openCamera threw"))
+        if (!enabled[displayIdx]) {
+            // Pane disabled by the user: keep the camera in its slot (so re-enabling can open it
+            // without a physical reconnect) but don't stream it.
+            FileLogger.log("camera connected into disabled slot=$idx display=$displayIdx; not opening")
+            setStatus(displayIdx, str(R.string.status_camera_off))
+        } else {
+            try {
+                FileLogger.log("openCamera slot=$idx display=$displayIdx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
+                camera.openCamera(textures[displayIdx], buildRequest())
+                setStatus(displayIdx, str(R.string.status_opening))
+            } catch (t: Throwable) {
+                FileLogger.log("openCamera slot=$idx FAILED", t)
+                setStatus(displayIdx, str(R.string.status_error, t.message ?: "openCamera threw"))
+            }
         }
         requestPermissionForPendingCameras()
     }
@@ -199,14 +874,16 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     override fun onCameraDisConnected(camera: MultiCameraClient.Camera) {
         FileLogger.log("onCameraDisConnected ${desc(camera.getUsbDevice())}")
         val idx = slotOf(camera)
-        if (idx >= 0 && !swappingSlots.contains(idx)) {
+        if (idx >= 0 && !swappingSlots.contains(idx) && !isSlotDisabled(idx)) {
             // Real disconnection — clear the slot so the camera can reconnect into a free slot.
             slots[idx] = null
             videoSizes[idx] = null
-            setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
+            setStatus(displayIndexFor(idx), str(R.string.status_disconnected))
         }
-        // If idx is in swappingSlots, closeCamera() was called by reopenOnDisplay; leave the
-        // slot intact so onCameraState(OPENED) can find the camera via slotOf().
+        // If idx is in swappingSlots, closeCamera() was called by reopenOnDisplay; if the slot is
+        // disabled, it was called by setPaneEnabled. Either way leave the slot intact so the camera
+        // can be reopened later (onCameraState(OPENED) / re-enable) via slotOf(). A genuine detach
+        // while disabled is still handled by onCameraDetached, which clears the slot.
         runCatching { camera.closeCamera() }
     }
 
@@ -218,6 +895,12 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         FileLogger.log("onCameraState code=$code msg=$msg dev=${desc(self.getUsbDevice())}")
         val idx = slotOf(self)
         if (idx < 0) return
+        if (isSlotDisabled(idx)) {
+            // The close came from the user disabling this pane; don't report it as an error or
+            // schedule a reopen. The pane is collapsed (or shows "Camera off" if both are off).
+            setStatus(displayIndexFor(idx), str(R.string.status_camera_off))
+            return
+        }
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
                 reopenAttempts[idx] = 0
@@ -228,9 +911,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 FileLogger.log("slot=$idx negotiated previewSize=${videoSizes[idx]?.width}x${videoSizes[idx]?.height}")
                 applyAspect(idx)
             }
-            ICameraStateCallBack.State.CLOSED -> setStatus(displayIndexFor(idx), getString(R.string.status_disconnected))
+            ICameraStateCallBack.State.CLOSED -> setStatus(displayIndexFor(idx), str(R.string.status_disconnected))
             ICameraStateCallBack.State.ERROR -> {
-                setStatus(displayIndexFor(idx), getString(R.string.status_error, msg ?: "unknown"))
+                setStatus(displayIndexFor(idx), str(R.string.status_error, msg ?: "unknown"))
                 // On hub reset both cameras detach+reattach; the second openCamera often races
                 // with the first camera's libuvc teardown and gets errno -99. Retry with backoff.
                 if (msg?.contains("open") == true && reopenAttempts[idx] < MAX_REOPEN_ATTEMPTS) {
@@ -267,16 +950,24 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     private fun scheduleStateDump() {
-        mainHandler.postDelayed(object : Runnable {
+        // Runs on its own thread: each tick makes several Binder calls (device list, USB
+        // permission checks) whose latency would otherwise land on the main thread every 3 s —
+        // observed as a periodic pane stutter during the first ~40 s of a session.
+        val thread = HandlerThread("StateDump").also { it.start() }
+        dumpThread = thread
+        val handler = Handler(thread.looper)
+        handler.postDelayed(object : Runnable {
             override fun run() {
-                val devices = runCatching { getDeviceList() }.getOrNull()
-                val sb = StringBuilder("state-dump #${dumps}: deviceList=${devices?.size ?: "null"} mapSize=${getCameraMap().size}")
-                getCameraMap().values.forEach { cam ->
-                    val d = cam.getUsbDevice()
-                    sb.append("\n    - ${desc(d)} hasPermission=${safeHasPermission(d)} opened=${runCatching { cam.isCameraOpened() }.getOrNull()}")
-                }
-                FileLogger.log(sb.toString())
-                if (++dumps < 12) mainHandler.postDelayed(this, 3000)
+                runCatching {
+                    val devices = runCatching { getDeviceList() }.getOrNull()
+                    val sb = StringBuilder("state-dump #${dumps}: deviceList=${devices?.size ?: "null"} mapSize=${getCameraMap().size}")
+                    getCameraMap().values.toList().forEach { cam ->
+                        val d = cam.getUsbDevice()
+                        sb.append("\n    - ${desc(d)} hasPermission=${safeHasPermission(d)} opened=${runCatching { cam.isCameraOpened() }.getOrNull()}")
+                    }
+                    FileLogger.log(sb.toString())
+                }.onFailure { FileLogger.log("state-dump failed", it) }
+                if (++dumps < 12) handler.postDelayed(this, 3000) else thread.quitSafely()
             }
         }, 2000)
     }
@@ -312,24 +1003,76 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         tv.post {
             val viewW = tv.width.toFloat()
             val viewH = tv.height.toFloat()
+            val cx = viewW / 2f
+            val cy = viewH / 2f
             val size = videoSizes[logicalIdx]
             if (viewW <= 0f || viewH <= 0f || size == null || size.width <= 0 || size.height <= 0) {
-                tv.setTransform(null)
+                // Size not negotiated yet: apply orientation only, at the stretch-fill baseline.
+                val (a, b) = axisScale(AspectMode.STRETCH, rotationDeg, 1, 1, viewW, viewH)
+                tv.setTransform(orientMatrix(a, b, cx, cy))
                 return@post
             }
-            val videoAr = size.width.toFloat() / size.height
-            val viewAr = viewW / viewH
-            var sx = 1f
-            var sy = 1f
-            when (aspectMode) {
-                AspectMode.STRETCH -> Unit
-                AspectMode.FIT_WIDTH -> sy = viewAr / videoAr
-                AspectMode.FIT_HEIGHT -> sx = videoAr / viewAr
-                AspectMode.FULL_FRAME ->
-                    if (videoAr > viewAr) sy = viewAr / videoAr else sx = videoAr / viewAr
-            }
-            tv.setTransform(Matrix().apply { setScale(sx, sy, viewW / 2f, viewH / 2f) })
+            val (a, b) = axisScale(aspectMode, rotationDeg, size.width, size.height, viewW, viewH)
+            tv.setTransform(orientMatrix(a, b, cx, cy))
         }
+    }
+
+    /**
+     * Builds the display-time transform: negate the x scale for a horizontal flip, then rotate
+     * the (already aspect-scaled) content about the pane center. setScale followed by postRotate
+     * yields Rotate·(FlipH·Scale), i.e. the video's width axis is scaled by [a], its height axis
+     * by [b], mirrored if [flipH], then the whole thing spun to [rotationDeg].
+     */
+    private fun orientMatrix(a: Float, b: Float, cx: Float, cy: Float): Matrix =
+        Matrix().apply {
+            setScale(if (flipH) -a else a, b, cx, cy)
+            if (rotationDeg != 0) postRotate(rotationDeg.toFloat(), cx, cy)
+        }
+
+    /**
+     * Computes the per-axis scale (relative to AUSBC's stretch-to-fill baseline) that renders a
+     * [vw]x[vh] video into a [viewW]x[viewH] pane under the given [mode] and [deg] rotation.
+     *
+     * Works by choosing the on-pane lengths of the video's own width/height axes (tw, th) — kept
+     * in the video's aspect ratio for every mode except STRETCH — accounting for the fact that a
+     * 90/270° rotation swaps which pane dimension each axis spans. Returns (tw/viewW, th/viewH),
+     * which are exactly the setScale factors since the baseline stretches one video axis across
+     * each full pane dimension.
+     */
+    private fun axisScale(
+        mode: AspectMode, deg: Int, vw: Int, vh: Int, viewW: Float, viewH: Float
+    ): Pair<Float, Float> {
+        val vertical = deg == 90 || deg == 270
+        val r = vw.toFloat() / vh          // video aspect ratio (w/h)
+        val tw: Float
+        val th: Float
+        when (mode) {
+            AspectMode.STRETCH -> {
+                tw = if (vertical) viewH else viewW
+                th = if (vertical) viewW else viewH
+            }
+            AspectMode.FIT_WIDTH -> if (!vertical) { tw = viewW; th = viewW / r }
+                                    else { th = viewW; tw = r * viewW }
+            AspectMode.FIT_HEIGHT -> if (!vertical) { th = viewH; tw = r * viewH }
+                                     else { tw = viewH; th = viewH / r }
+            AspectMode.FULL_FRAME -> {
+                th = if (!vertical) minOf(viewH, viewW / r) else minOf(viewW, viewH / r)
+                tw = r * th
+            }
+        }
+        return Pair(tw / viewW, th / viewH)
+    }
+
+    /** Panel scale (fraction) -> SeekBar progress 0..100 across the allowed scale range. */
+    private fun scaleToProgress(scale: Float): Int {
+        val range = SpatialControls.MAX_PANEL_SCALE - SpatialControls.MIN_PANEL_SCALE
+        return (((scale - SpatialControls.MIN_PANEL_SCALE) / range) * 100f).toInt().coerceIn(0, 100)
+    }
+
+    /** SeekBar progress 0..100 -> panel scale (fraction) across the allowed scale range. */
+    private fun progressToScale(progress: Int): Float {
+        val range = SpatialControls.MAX_PANEL_SCALE - SpatialControls.MIN_PANEL_SCALE
+        return SpatialControls.MIN_PANEL_SCALE + (progress / 100f) * range
     }
 
     private fun loadAspectMode(): AspectMode {
@@ -344,6 +1087,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     private fun performSwap() {
+        // Swapping close/reopens both cameras, which tears down their encoders mid-file — finish
+        // the recordings cleanly first rather than leaving truncated MP4s.
+        if (recording) stopRecording()
         swapped = !swapped
         FileLogger.log("swap -> $swapped")
         saveSwapped(swapped)
@@ -351,6 +1097,235 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
             val camera = slots[logicalIdx] ?: continue
             reopenOnDisplay(camera, logicalIdx)
         }
+    }
+
+    /**
+     * Updates the clock + battery readout and re-posts itself once a second. Runs on mainHandler,
+     * which onDestroyView clears via removeCallbacksAndMessages(null), so this stops on teardown
+     * without an explicit flag.
+     */
+    private fun startStatusReadoutTicker() {
+        val tick = object : Runnable {
+            override fun run() {
+                // Guard on statusReadout (cleared in onDestroyView), not getView(): this is first
+                // invoked synchronously from getRootView(), before the fragment's own view field
+                // is assigned, so checking view == null here would abort on the very first tick.
+                if (statusReadout == null) return
+                val time = timeFormat.format(Date())
+                val batteryManager = requireContext().getSystemService(BatteryManager::class.java)
+                val battery = batteryManager
+                    ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val charging = batteryManager?.isCharging == true
+                val base = if (battery != null && battery in 0..100) "$time  $battery%" else time
+                val text = if (recording) "⏺ $base" else base
+                statusReadout?.text = text
+                statusReadoutLeft?.text = text
+                statusReadoutRight?.text = text
+                // White charging bolt right after the percent (an end compound drawable, so it
+                // inherits no emoji color). Only when charging and a percent is showing.
+                val bolt = if (charging && battery != null && battery in 0..100)
+                    R.drawable.ic_charging_bolt else 0
+                statusReadout?.setCompoundDrawablesWithIntrinsicBounds(0, 0, bolt, 0)
+                statusReadoutLeft?.setCompoundDrawablesWithIntrinsicBounds(0, 0, bolt, 0)
+                statusReadoutRight?.setCompoundDrawablesWithIntrinsicBounds(0, 0, bolt, 0)
+                mainHandler.postDelayed(this, STATUS_READOUT_INTERVAL_MS)
+            }
+        }
+        tick.run()
+    }
+
+    // --- head-tracked menu cursor -----------------------------------------------
+    //
+    // A left-right head shake (detected scene-side by HeadCursorSystem) toggles a "head cursor"
+    // session: head-follow pauses so the panel freezes in space, the settings menu opens, and a
+    // gaze-tracked reticle appears at the centre of vision. Dwelling the reticle on a button for
+    // DWELL_MS clicks it (via performClick, the same path the controller uses); sliders are
+    // ignored. Closing the menu (dwell the gear, controller B, or shake again) ends the session
+    // and head-follow resumes.
+
+    /** Runs while the view is alive: idle-polls for the shake gesture, ~60Hz while a session runs. */
+    private fun startHeadCursorTicker() {
+        val tick = object : Runnable {
+            override fun run() {
+                if (crosshairView == null) return // torn down in onDestroyView
+                processHeadCursor()
+                mainHandler.postDelayed(this, if (headCursorActive) CURSOR_FRAME_MS else IDLE_POLL_MS)
+            }
+        }
+        tick.run()
+    }
+
+    private fun processHeadCursor() {
+        // Each shake bumps the epoch; a change toggles the session open/closed.
+        val epoch = HeadCursorBridge.gestureEpoch
+        if (epoch != lastGestureEpoch) {
+            lastGestureEpoch = epoch
+            if (headCursorActive) endHeadCursorSession() else startHeadCursorSession()
+        }
+        if (!headCursorActive) return
+        // The menu was closed some other way (e.g. dwell-clicking the gear, which toggles it):
+        // end the session so head-follow resumes and the reticle disappears.
+        if (!isSettingsVisible()) {
+            endHeadCursorSession()
+            return
+        }
+        updateHeadCursor()
+    }
+
+    private fun startHeadCursorSession() {
+        headCursorActive = true
+        HeadCursorBridge.active = true // pauses HeadFollowSystem so the panel stays put
+        if (!isSettingsVisible()) setSettingsVisible(true)
+        resetHover()
+        crosshairView?.setStereoSplit(stereoOn)
+        crosshairView?.visibility = View.VISIBLE
+        FileLogger.log("head-cursor: session started (stereo=$stereoOn)")
+    }
+
+    private fun endHeadCursorSession() {
+        headCursorActive = false
+        HeadCursorBridge.active = false
+        crosshairView?.visibility = View.GONE
+        resetHover()
+        if (isSettingsVisible()) setSettingsVisible(false)
+        FileLogger.log("head-cursor: session ended")
+    }
+
+    private fun resetHover() {
+        hoverTarget = null
+        hoverArmedTarget = null
+        hoverStartMs = 0L
+    }
+
+    /** Moves the reticle to the gaze/panel point and runs the dwell timer against the button under it. */
+    private fun updateHeadCursor() {
+        val root = view ?: return
+        val cross = crosshairView ?: return
+        val rw = root.width
+        val rh = root.height
+        if (rw == 0 || rh == 0) return
+
+        if (!HeadCursorBridge.onPanel) {
+            // Gaze is off the panel — there's no surface to draw the reticle on. Hide + disarm.
+            if (cross.visibility != View.GONE) cross.visibility = View.GONE
+            hoverTarget = null
+            hoverStartMs = 0L
+            return
+        }
+        if (cross.visibility != View.VISIBLE) cross.visibility = View.VISIBLE
+
+        val u = HeadCursorBridge.cursorU
+        val v = HeadCursorBridge.cursorV
+        // In stereo the surface is a LeftRight pair; hit-test against the left copy (u across its
+        // half), matching how barItems() and the pointer remap treat the left copy as interactive.
+        val half = if (stereoOn) rw / 2f else rw.toFloat()
+        val px = u * half
+        val py = v * rh
+        val target = hitTestHover(root, px, py)
+
+        // Re-arm only once the reticle has left the button it last clicked (no auto-repeat).
+        if (hoverArmedTarget != null && target !== hoverArmedTarget) hoverArmedTarget = null
+
+        val now = System.currentTimeMillis()
+        if (target !== hoverTarget) {
+            hoverTarget = target
+            hoverStartMs = now
+        }
+        var progress = 0f
+        if (target != null && target !== hoverArmedTarget) {
+            progress = ((now - hoverStartMs).toFloat() / DWELL_MS).coerceIn(0f, 1f)
+            if (progress >= 1f) {
+                FileLogger.log("head-cursor: dwell-click ${resName(target)}")
+                target.performClick()
+                hoverArmedTarget = target // must leave before it can fire again
+                hoverStartMs = now
+                progress = 0f
+            }
+        }
+        cross.setCursor(u, v, progress)
+    }
+
+    private val hoverHitLoc = IntArray(2)
+    private val hoverRootLoc = IntArray(2)
+
+    /** Topmost clickable TextView/CheckBox (never a SeekBar) whose bounds contain (px, py). */
+    private fun hitTestHover(root: View, px: Float, py: Float): View? {
+        root.getLocationInWindow(hoverRootLoc)
+        val candidates = ArrayList<View>()
+        collectHoverTargets(root, candidates)
+        var hit: View? = null
+        for (c in candidates) {
+            c.getLocationInWindow(hoverHitLoc)
+            val left = (hoverHitLoc[0] - hoverRootLoc[0]).toFloat()
+            val top = (hoverHitLoc[1] - hoverRootLoc[1]).toFloat()
+            if (px >= left && px <= left + c.width && py >= top && py <= top + c.height) {
+                hit = c // keep the last match — later siblings draw on top
+            }
+        }
+        return hit
+    }
+
+    private fun collectHoverTargets(v: View, out: MutableList<View>) {
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) collectHoverTargets(v.getChildAt(i), out)
+        }
+        // TextView covers the button labels and (via Button) the CheckBoxes; SeekBar is not a
+        // TextView, so sliders are excluded from the hover feature as required. isShown skips
+        // controls hidden behind a collapsed column (e.g. the mono menu while in stereo).
+        if (v is TextView && v.isClickable && v.isShown) out.add(v)
+    }
+
+    private fun resName(v: View): String =
+        runCatching { resources.getResourceEntryName(v.id) }.getOrDefault("view")
+
+    /**
+     * Restores every setting to its default: the pane prefs this fragment owns (rotation, flip,
+     * aspect, gap, swap) and the shared spatial controls (whose setters fire ImmersiveActivity's
+     * pref listener, re-applying follow/smoothing/passthrough/scale/curve live). Also refreshes
+     * the settings-menu labels and sliders so the UI reflects the restored values.
+     */
+    private fun resetAllSettings() {
+        val root = view ?: return
+        FileLogger.log("reset all settings")
+
+        rotationDeg = 0
+        saveRotation(rotationDeg)
+        rotationToggle?.text = str(R.string.rotation_label, rotationDeg)
+        flipH = false
+        saveFlipH(flipH)
+        flipToggle?.text = str(R.string.flip_h_off)
+        aspectMode = AspectMode.FULL_FRAME
+        saveAspectMode(aspectMode)
+        aspectToggle?.text = str(aspectMode.labelRes)
+        applyAspectToAll()
+        saveGapPct(0)
+        applyGap(0)
+        // Programmatic setProgress updates the sliders' labels via onProgressChanged, but with
+        // fromUser=false it writes no prefs — the setters above/below are the commits.
+        root.findViewById<SeekBar>(R.id.gapSlider)?.progress = 0
+        if (swapped) performSwap()
+        // Re-enable both cameras; checking a currently-unchecked box fires its listener, which
+        // reopens the camera and restores the pane layout (a no-op for already-enabled panes).
+        enableChecks?.forEach { it.isChecked = true }
+
+        val ctx = requireContext()
+        SpatialControls.setHeadFollowEnabled(ctx, SpatialControls.DEFAULT_HEAD_FOLLOW)
+        SpatialControls.setSmoothingEnabled(ctx, SpatialControls.DEFAULT_SMOOTHING)
+        SpatialControls.setPassthroughEnabled(ctx, SpatialControls.DEFAULT_PASSTHROUGH)
+        SpatialControls.setStereoEnabled(ctx, SpatialControls.DEFAULT_STEREO)
+        SpatialControls.setPanelDistance(ctx, SpatialControls.DEFAULT_PANEL_DISTANCE)
+        SpatialControls.setPanelScale(ctx, SpatialControls.DEFAULT_PANEL_SCALE)
+        SpatialControls.setPanelCurve(ctx, SpatialControls.DEFAULT_PANEL_CURVE)
+        root.findViewById<TextView>(R.id.headFollowToggle)?.text =
+            str(if (SpatialControls.DEFAULT_HEAD_FOLLOW) R.string.head_follow_on else R.string.head_follow_off)
+        root.findViewById<TextView>(R.id.smoothingToggle)?.text =
+            str(if (SpatialControls.DEFAULT_SMOOTHING) R.string.smoothing_on else R.string.smoothing_off)
+        root.findViewById<TextView>(R.id.passthroughToggle)?.text =
+            str(if (SpatialControls.DEFAULT_PASSTHROUGH) R.string.passthrough_on else R.string.passthrough_off)
+        root.findViewById<SeekBar>(R.id.scaleSlider)?.progress =
+            scaleToProgress(SpatialControls.DEFAULT_PANEL_SCALE)
+        root.findViewById<SeekBar>(R.id.curveSlider)?.progress =
+            (SpatialControls.DEFAULT_PANEL_CURVE * 100f).toInt()
     }
 
     /**
@@ -364,7 +1339,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         mainHandler.postDelayed({
             if (slots[logicalIdx] != camera) return@postDelayed  // slot reassigned; skip
             val displayIdx = displayIndexFor(logicalIdx)
-            setStatus(displayIdx, getString(R.string.status_connecting))
+            setStatus(displayIdx, str(R.string.status_connecting))
             runCatching { camera.openCamera(textures[displayIdx], buildRequest()) }
                 .onFailure { FileLogger.log("reopen slot=$logicalIdx attempt=$attempt FAILED", it) }
         }, delay)
@@ -373,7 +1348,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     /** Redirects an already-open camera's render target to its (possibly new) display texture. */
     private fun reopenOnDisplay(camera: MultiCameraClient.Camera, logicalIdx: Int) {
         val displayIdx = displayIndexFor(logicalIdx)
-        setStatus(displayIdx, getString(R.string.status_connecting))
+        setStatus(displayIdx, str(R.string.status_connecting))
         // Mark slot as intentionally swapping so onCameraDisConnected doesn't null it out.
         // The slot must stay populated so onCameraState(OPENED) can find the camera via slotOf().
         swappingSlots.add(logicalIdx)
@@ -386,10 +1361,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 FileLogger.log("swap reopen slot=$logicalIdx -> display=$displayIdx")
                 camera.setCameraStateCallBack(this)
                 camera.openCamera(textures[displayIdx], buildRequest())
-                setStatus(displayIdx, getString(R.string.status_opening))
+                setStatus(displayIdx, str(R.string.status_opening))
             } catch (t: Throwable) {
                 FileLogger.log("swap reopen slot=$logicalIdx FAILED", t)
-                setStatus(displayIdx, getString(R.string.status_error, t.message ?: "swap reopen threw"))
+                setStatus(displayIdx, str(R.string.status_error, t.message ?: "swap reopen threw"))
             }
         }, SWAP_REOPEN_DELAY_MS)
     }
@@ -401,6 +1376,145 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private fun saveSwapped(value: Boolean) {
         requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(PREF_SWAPPED, value).apply()
+    }
+
+    private fun loadRotation(): Int {
+        val deg = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(PREF_ROTATION, 0)
+        return if (deg % 90 == 0) ((deg % 360) + 360) % 360 else 0
+    }
+
+    private fun saveRotation(value: Int) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(PREF_ROTATION, value).apply()
+    }
+
+    private fun loadFlipH(): Boolean =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_FLIP_H, false)
+
+    private fun saveFlipH(value: Boolean) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_FLIP_H, value).apply()
+    }
+
+    private fun loadGapPct(): Int =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(PREF_GAP_PCT, 0).coerceIn(0, 100)
+
+    private fun saveGapPct(value: Int) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(PREF_GAP_PCT, value).apply()
+    }
+
+    private fun loadCompositeMode(): Boolean =
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_COMPOSITE_MODE, false)
+
+    private fun saveCompositeMode(value: Boolean) {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_COMPOSITE_MODE, value).apply()
+    }
+
+    /**
+     * Gap percent -> spacer layout weight. Panes have weight 1 each, so weight w gives the
+     * spacer w/(2+w) of the row: 100% -> weight 2 -> half the row width. The panes' own
+     * layout-change listeners re-run applyAspect when they resize.
+     */
+    private fun applyGap(pct: Int) {
+        val spacer = gapSpacer ?: return
+        val lp = spacer.layoutParams as LinearLayout.LayoutParams
+        // In stereo the gap shifts each eye's image outward (a divergence/alignment trim), so a
+        // much smaller range is both sufficient and safer for eye comfort.
+        lp.weight = pct / 100f * (if (stereoOn) MAX_GAP_WEIGHT_STEREO else MAX_GAP_WEIGHT)
+        spacer.layoutParams = lp
+    }
+
+    // --- enable / disable per pane ---------------------------------------------
+
+    /** True if the display pane currently showing this logical slot is disabled by the user. */
+    private fun isSlotDisabled(logicalIdx: Int): Boolean = !enabled[displayIndexFor(logicalIdx)]
+
+    /**
+     * Turns a display pane on or off. Disabling closes that pane's camera (kept in its slot for a
+     * later re-enable) and collapses its container so the other pane fills the view; enabling grows
+     * it back and reopens the camera. Uses the same close-then-open lifecycle as swap/detach rather
+     * than reparenting a TextureView, so no SurfaceTexture is orphaned.
+     */
+    private fun setPaneEnabled(displayIdx: Int, value: Boolean) {
+        if (enabled[displayIdx] == value) return
+        enabled[displayIdx] = value
+        FileLogger.log("pane $displayIdx enabled -> $value")
+        saveEnabled()
+        updatePaneVisibility()
+
+        val logicalIdx = displayIndexFor(displayIdx)  // displayIndexFor is its own inverse
+        val camera = slots[logicalIdx] ?: return
+        if (value) {
+            reopenAfterEnable(camera, logicalIdx)
+        } else {
+            // Recording holds the camera's encoder open; disabling would truncate its file, so stop
+            // cleanly first (mirrors performSwap).
+            if (recording) stopRecording()
+            // isSlotDisabled(logicalIdx) is now true, so onCameraDisConnected/onCameraState keep the
+            // slot and report "Camera off" instead of an error.
+            setStatus(displayIdx, str(R.string.status_camera_off))
+            runCatching { camera.closeCamera() }
+                .onFailure { FileLogger.log("disable closeCamera slot=$logicalIdx failed", it) }
+        }
+    }
+
+    /** Reopens a camera whose pane was just re-enabled, after letting its container relayout. */
+    private fun reopenAfterEnable(camera: MultiCameraClient.Camera, logicalIdx: Int) {
+        val displayIdx = displayIndexFor(logicalIdx)
+        setStatus(displayIdx, str(R.string.status_connecting))
+        // The container just became visible; give it a moment to lay out and (re)create the
+        // TextureView's SurfaceTexture before opening onto it.
+        mainHandler.postDelayed({
+            if (slots[logicalIdx] != camera || isSlotDisabled(logicalIdx)) return@postDelayed
+            try {
+                FileLogger.log("re-enable reopen slot=$logicalIdx -> display=$displayIdx")
+                camera.setCameraStateCallBack(this)
+                camera.openCamera(textures[displayIdx], buildRequest())
+                setStatus(displayIdx, str(R.string.status_opening))
+            } catch (t: Throwable) {
+                FileLogger.log("re-enable reopen slot=$logicalIdx FAILED", t)
+                setStatus(displayIdx, str(R.string.status_error, t.message ?: "reopen threw"))
+            }
+        }, SWAP_REOPEN_DELAY_MS)
+    }
+
+    /**
+     * Shows/hides pane containers so a single enabled pane fills the whole view. Both enabled or
+     * both disabled -> 50/50 with the passthrough gap; exactly one enabled -> the other collapses
+     * and the gap is suppressed so the survivor fills the surface.
+     */
+    private fun updatePaneVisibility() {
+        if (!::panes.isInitialized) return
+        val enabledCount = enabled.count { it }
+        for (d in 0 until SLOT_COUNT) {
+            // Collapse a disabled pane only when the other pane is filling the view; if both are
+            // off, keep both visible so each can show its "Camera off" overlay.
+            val visible = enabled[d] || enabledCount == 0
+            panes[d].visibility = if (visible) View.VISIBLE else View.GONE
+            if (!enabled[d] && enabledCount == 0) setStatus(d, str(R.string.status_camera_off))
+        }
+        // No gap between panes when only one is showing (it would push the survivor off-center).
+        gapSpacer?.visibility = if (enabledCount == 1) View.GONE else View.VISIBLE
+    }
+
+    private fun loadEnabled() {
+        val prefs = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        enabled[0] = prefs.getBoolean(PREF_ENABLED_LEFT, true)
+        enabled[1] = prefs.getBoolean(PREF_ENABLED_RIGHT, true)
+    }
+
+    private fun saveEnabled() {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_ENABLED_LEFT, enabled[0])
+            .putBoolean(PREF_ENABLED_RIGHT, enabled[1])
+            .apply()
     }
 
     private fun buildRequest(): CameraRequest =
@@ -423,12 +1537,196 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     }
 
     override fun onDestroyView() {
+        stopRecording()
+        recordToggle = null
+        compositeToggle = null
         FileLogger.setListener(null)
         logText = null
         logScroll = null
+        logOverlay = null
         aspectToggle = null
+        rotationToggle = null
+        flipToggle = null
+        settingsList = null
+        settingsScroll = null
+        settingsScrim = null
+        settingsToggle = null
+        enableChecks = null
+        statusReadout = null
+        statusReadoutLeft = null
+        statusReadoutRight = null
+        stereoOverlay = null
+        stereoGearRow = null
+        stereoHalves = emptyList()
+        // Drop any active head-cursor session so head-follow isn't left paused after teardown; the
+        // ticker stops on its own once crosshairView is null (and via removeCallbacksAndMessages).
+        crosshairView = null
+        headCursorActive = false
+        HeadCursorBridge.active = false
         mainHandler.removeCallbacksAndMessages(null)
+        dumpThread?.quitSafely()
+        dumpThread = null
         super.onDestroyView()
+    }
+
+    // --- settings toggle + controller input -------------------------------------
+    //
+    // A gear button above the video toggles the (highly transparent) controls row, which is hidden
+    // by default. A Quest controller can also drive it: MENU/Y opens the controls and focuses them
+    // (or hides them if already open), then left/right step across items, up/down nudge a focused
+    // slider, and A/center clicks. Navigation keys are only intercepted while the controls hold
+    // focus, so normal pointer/hand-ray use of the camera view is unaffected.
+
+    fun isSettingsVisible(): Boolean =
+        if (stereoOn) stereoOverlay?.visibility == View.VISIBLE
+        else settingsScroll?.visibility == View.VISIBLE
+
+    fun toggleSettings() = setSettingsVisible(!isSettingsVisible())
+
+    private fun setSettingsVisible(show: Boolean) {
+        if (stereoOn) {
+            stereoOverlay?.visibility = if (show) View.VISIBLE else View.GONE
+            FileLogger.log("stereo settings ${if (show) "shown" else "hidden"}")
+            if (!show) view?.findFocus()?.clearFocus()
+            return
+        }
+        val scroll = settingsScroll ?: return
+        scroll.visibility = if (show) View.VISIBLE else View.GONE
+        settingsScrim?.visibility = if (show) View.VISIBLE else View.GONE
+        settingsToggle?.text = str(if (show) R.string.settings_close else R.string.settings_open)
+        FileLogger.log("settings controls ${if (show) "shown" else "hidden"}")
+        if (!show) view?.findFocus()?.clearFocus()
+    }
+
+    /** Ordered list of focusable controls in the row (buttons + sliders), left to right. */
+    private fun barItems(): List<View> {
+        // In stereo, controller navigation runs on the LEFT copy of the duplicated column; the
+        // change handlers mirror everything onto the right copy.
+        val list = (if (stereoOn) stereoHalves.firstOrNull() else settingsList) ?: return emptyList()
+        val out = ArrayList<View>()
+        collectFocusables(list, out)
+        return out
+    }
+
+    private fun collectFocusables(v: View, out: MutableList<View>) {
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) collectFocusables(v.getChildAt(i), out)
+        } else if (v.isFocusable && v.visibility == View.VISIBLE) {
+            out.add(v)
+        }
+        // SeekBars are focusable ViewGroups-of-nothing; include them explicitly.
+        if (v is SeekBar && v.isFocusable && v.visibility == View.VISIBLE && v !in out) out.add(v)
+    }
+
+    private fun barHasFocus(): Boolean {
+        val focus = view?.findFocus() ?: return false
+        return barItems().contains(focus)
+    }
+
+    // ---- adb broadcast entry points (called by MainActivity.debugReceiver) ------
+
+    fun toggleRecordingFromAdb() = activity?.runOnUiThread { toggleRecording() }
+    fun startRecordingFromAdb() = activity?.runOnUiThread { if (!recording) toggleRecording() }
+    fun stopRecordingFromAdb()  = activity?.runOnUiThread { if (recording)  stopRecording() }
+    fun openSettingsFromAdb()   = activity?.runOnUiThread { setSettingsVisible(true) }
+    fun resetToDefaultsFromAdb() = activity?.runOnUiThread { resetAllSettings() }
+
+    fun handleControllerKey(keyCode: Int): Boolean {
+        // In stereo, B/BACK with the settings closed drops back to mono (recreating the panel
+        // with the full UI). MENU/Y and the rest fall through to the shared settings handling,
+        // which operates on the duplicated per-eye column via the stereo-aware helpers.
+        if (stereoOn && !isSettingsVisible() &&
+            (keyCode == KeyEvent.KEYCODE_BUTTON_B || keyCode == KeyEvent.KEYCODE_BACK)
+        ) {
+            FileLogger.log("controller exit stereo -> mono (panel will recreate)")
+            // Undo the 150% stereo default so mono comes back at its own 100% default.
+            SpatialControls.setPanelScale(requireContext(), SpatialControls.DEFAULT_PANEL_SCALE)
+            SpatialControls.setStereoEnabled(requireContext(), false)
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BUTTON_Y) {
+            if (isSettingsVisible()) {
+                setSettingsVisible(false)
+            } else {
+                setSettingsVisible(true)
+                focusFirstItem()
+            }
+            return true
+        }
+        if (!isSettingsVisible() || !barHasFocus()) return false
+        return when (keyCode) {
+            KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
+                setSettingsVisible(false); true
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> moveFocusStep(-1)
+            KeyEvent.KEYCODE_DPAD_DOWN -> moveFocusStep(+1)
+            KeyEvent.KEYCODE_DPAD_LEFT -> nudgeSlider(-1)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> nudgeSlider(+1)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_ENTER ->
+                view?.findFocus()?.performClick() ?: false
+            else -> false
+        }
+    }
+
+    /** Thumbstick / hat navigation, active only while the controls are open and hold focus. */
+    fun handleControllerMotion(event: MotionEvent): Boolean {
+        if (!isSettingsVisible() || !barHasFocus()) return false
+        if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
+        val x = event.getAxisValue(MotionEvent.AXIS_X).let {
+            if (it == 0f) event.getAxisValue(MotionEvent.AXIS_HAT_X) else it
+        }
+        val y = event.getAxisValue(MotionEvent.AXIS_Y).let {
+            if (it == 0f) event.getAxisValue(MotionEvent.AXIS_HAT_Y) else it
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastStickMove < STICK_REPEAT_MS) return true
+        val consumed = when {
+            y < -STICK_DEADZONE -> moveFocusStep(-1)
+            y > STICK_DEADZONE -> moveFocusStep(+1)
+            x < -STICK_DEADZONE -> nudgeSlider(-1)
+            x > STICK_DEADZONE -> nudgeSlider(+1)
+            else -> false
+        }
+        if (consumed) lastStickMove = now
+        return consumed
+    }
+
+    private fun focusFirstItem(): Boolean =
+        barItems().firstOrNull()?.let { it.post { it.requestFocus() }; true } ?: false
+
+    /** Moves focus [step] items along the column (wrapping), independent of on-screen geometry. */
+    private fun moveFocusStep(step: Int): Boolean {
+        val items = barItems()
+        if (items.isEmpty()) return false
+        val idx = items.indexOf(view?.findFocus())
+        val next = if (idx < 0) 0 else (idx + step + items.size) % items.size
+        return items[next].requestFocus()
+    }
+
+    /** Up/down on a focused SeekBar nudges it (and commits); otherwise returns false. */
+    private fun nudgeSlider(delta: Int): Boolean {
+        val sb = view?.findFocus() as? SeekBar ?: return false
+        sb.progress = (sb.progress + delta * SEEKBAR_STEP).coerceIn(0, sb.max)
+        // Programmatic setProgress doesn't fire fromUser, so commit the persisted value directly.
+        when (sb.id) {
+            R.id.curveSlider -> SpatialControls.setPanelCurve(requireContext(), sb.progress / 100f)
+            R.id.scaleSlider, R.id.stScaleSlider ->
+                SpatialControls.setPanelScale(requireContext(), progressToScale(sb.progress))
+            R.id.gapSlider, R.id.stGapSlider -> {
+                applyGap(sb.progress)
+                saveGapPct(sb.progress)
+            }
+        }
+        mirrorStereoSlider(sb)
+        return true
+    }
+
+    /** Copies a stereo slider's progress to its twin in the other eye's column. */
+    private fun mirrorStereoSlider(sb: SeekBar) {
+        if (!stereoOn) return
+        stereoHalves.forEach { half ->
+            half.findViewById<SeekBar>(sb.id)?.takeIf { it !== sb }?.progress = sb.progress
+        }
     }
 
     companion object {
@@ -439,8 +1737,27 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREFS_NAME = "camera_eyes"
         private const val PREF_ASPECT_MODE = "aspect_mode"
         private const val PREF_SWAPPED = "panes_swapped"
+        private const val PREF_ROTATION = "rotation_deg"
+        private const val PREF_FLIP_H = "flip_horizontal"
+        private const val PREF_GAP_PCT = "pane_gap_pct"
+        private const val PREF_COMPOSITE_MODE = "record_composite"
+        private const val PREF_ENABLED_LEFT = "pane_enabled_left"
+        private const val PREF_ENABLED_RIGHT = "pane_enabled_right"
+        private const val MAX_GAP_WEIGHT = 2f         // gap slider at 100% = gap takes half the row
+        private const val MAX_GAP_WEIGHT_STEREO = 0.5f // stereo: gap is a divergence trim, keep small
         private const val SWAP_REOPEN_DELAY_MS = 300L
         private const val OPEN_RETRY_BASE_MS = 600L   // retry delay per attempt (multiplied by attempt#)
         private const val MAX_REOPEN_ATTEMPTS = 3
+
+        // Controller/gamepad tuning for the settings bar.
+        private const val STICK_DEADZONE = 0.5f       // stick magnitude before a focus move fires
+        private const val STICK_REPEAT_MS = 250L      // min gap between stick-driven focus moves
+        private const val SEEKBAR_STEP = 5            // progress units per D-pad/stick nudge
+        private const val STATUS_READOUT_INTERVAL_MS = 1000L
+
+        // Head-cursor tuning.
+        private const val DWELL_MS = 3000f            // hover time on a button before it clicks
+        private const val CURSOR_FRAME_MS = 16L       // reticle refresh while a session is active
+        private const val IDLE_POLL_MS = 100L         // gesture poll rate while idle (cheap)
     }
 }
