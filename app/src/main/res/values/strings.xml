@@ -21,6 +21,9 @@
     <string name="aspect_fit_height">Aspect: V-fit</string>
     <string name="aspect_full_frame">Aspect: Full frame</string>
     <string name="swap_cameras">Swap</string>
+    <string name="cam_left">Cam 1</string>
+    <string name="cam_right">Cam 2</string>
+    <string name="status_camera_off">Camera off</string>
     <string name="rotation_label">Rotate: %1$d°</string>
     <string name="flip_h_on">Flip H: On</string>
     <string name="flip_h_off">Flip H: Off</string>

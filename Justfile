@@ -4,6 +4,8 @@
 export JAVA_HOME := home_directory() / "Android/jdk-17.0.19+10"
 export ANDROID_HOME := home_directory() / "Android/Sdk"
 
+APP_ID := "com.compuglobal.astralprojector"
+
 # Default: show available recipes
 default:
     @just --list
@@ -79,9 +81,17 @@ build-release:
 install-debug:
     "$ANDROID_HOME/platform-tools/adb" install -r app/build/outputs/apk/debug/app-debug.apk
 
+# Uninstall the app from a connected device (ignores "not installed" errors)
+uninstall:
+    "$ANDROID_HOME/platform-tools/adb" uninstall {{APP_ID}} || true
+
+# Uninstall any existing build (e.g. signed with a different machine's debug
+# keystore, which fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE) then install fresh
+reinstall-debug: uninstall install-debug
+
 # Launch the app on a connected device
 run-debug:
-    "$ANDROID_HOME/platform-tools/adb" shell monkey -p com.compuglobal.astralprojector -c android.intent.category.LAUNCHER 1
+    "$ANDROID_HOME/platform-tools/adb" shell monkey -p {{APP_ID}} -c android.intent.category.LAUNCHER 1
 
 # Grant required permissions (must re-run after every fresh install)
 # horizonos.* and WRITE_EXTERNAL_STORAGE cannot be granted via runtime dialog — ADB only.
@@ -97,6 +107,9 @@ grant-permissions:
 
 # Build, install, grant permissions, and run
 refresh: build-debug install-debug grant-permissions run-debug
+
+# Build, uninstall any incompatible existing build, install, and run
+refresh-clean: build-debug reinstall-debug run-debug
 
 # List connected Android devices
 devices:

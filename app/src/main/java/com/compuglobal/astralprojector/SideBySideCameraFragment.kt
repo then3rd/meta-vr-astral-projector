@@ -16,6 +16,7 @@ import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -102,6 +103,15 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private lateinit var textures: Array<AspectRatioTextureView>
     private lateinit var statuses: Array<TextView>
 
+    // Per-display-pane enable state (0 = left, 1 = right), toggled by the settings-menu checkboxes
+    // and persisted. A disabled pane's camera is closed and its container collapsed so the remaining
+    // enabled pane fills the view; both disabled -> both panes show "Camera off". Indexed by display
+    // pane so it stays intuitive under a swap. Mono only — in stereo each eye is a fixed half, so the
+    // array stays [true, true] and the gating below is inert.
+    private val enabled = booleanArrayOf(true, true)
+    private lateinit var panes: Array<View>
+    private var enableChecks: Array<CheckBox>? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var dumps = 0
 
@@ -182,6 +192,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         val root = inflater.inflate(R.layout.fragment_side_by_side, container, false)
         textures = arrayOf(root.findViewById(R.id.textureLeft), root.findViewById(R.id.textureRight))
         statuses = arrayOf(root.findViewById(R.id.statusLeft), root.findViewById(R.id.statusRight))
+        panes = arrayOf(root.findViewById(R.id.paneLeft), root.findViewById(R.id.paneRight))
 
         logScroll = root.findViewById(R.id.logScroll)
         logText = root.findViewById(R.id.logText)
@@ -234,6 +245,22 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         swapped = loadSwapped()
         root.findViewById<TextView>(R.id.swapToggle).setOnClickListener {
             performSwap()
+        }
+
+        // Per-camera enable checkboxes. Mono only: in stereo each eye is a fixed half of the
+        // surface, so `enabled` stays [true, true] and both panes always render.
+        if (!stereoOn) {
+            loadEnabled()
+            val checks = arrayOf(
+                root.findViewById<CheckBox>(R.id.enableLeft),
+                root.findViewById<CheckBox>(R.id.enableRight),
+            )
+            enableChecks = checks
+            checks.forEachIndexed { displayIdx, cb ->
+                cb.isChecked = enabled[displayIdx]
+                cb.setOnCheckedChangeListener { _, isChecked -> setPaneEnabled(displayIdx, isChecked) }
+            }
+            updatePaneVisibility()
         }
 
         // Rotation: cycles 0 -> 90 -> 180 -> 270 (snaps to the four orientations).
@@ -806,13 +833,20 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         slots[idx] = camera
         camera.setCameraStateCallBack(this)
         val displayIdx = displayIndexFor(idx)
-        try {
-            FileLogger.log("openCamera slot=$idx display=$displayIdx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
-            camera.openCamera(textures[displayIdx], buildRequest())
-            setStatus(displayIdx, str(R.string.status_opening))
-        } catch (t: Throwable) {
-            FileLogger.log("openCamera slot=$idx FAILED", t)
-            setStatus(displayIdx, str(R.string.status_error, t.message ?: "openCamera threw"))
+        if (!enabled[displayIdx]) {
+            // Pane disabled by the user: keep the camera in its slot (so re-enabling can open it
+            // without a physical reconnect) but don't stream it.
+            FileLogger.log("camera connected into disabled slot=$idx display=$displayIdx; not opening")
+            setStatus(displayIdx, str(R.string.status_camera_off))
+        } else {
+            try {
+                FileLogger.log("openCamera slot=$idx display=$displayIdx ${PREVIEW_WIDTH}x$PREVIEW_HEIGHT")
+                camera.openCamera(textures[displayIdx], buildRequest())
+                setStatus(displayIdx, str(R.string.status_opening))
+            } catch (t: Throwable) {
+                FileLogger.log("openCamera slot=$idx FAILED", t)
+                setStatus(displayIdx, str(R.string.status_error, t.message ?: "openCamera threw"))
+            }
         }
         requestPermissionForPendingCameras()
     }
@@ -820,14 +854,16 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     override fun onCameraDisConnected(camera: MultiCameraClient.Camera) {
         FileLogger.log("onCameraDisConnected ${desc(camera.getUsbDevice())}")
         val idx = slotOf(camera)
-        if (idx >= 0 && !swappingSlots.contains(idx)) {
+        if (idx >= 0 && !swappingSlots.contains(idx) && !isSlotDisabled(idx)) {
             // Real disconnection — clear the slot so the camera can reconnect into a free slot.
             slots[idx] = null
             videoSizes[idx] = null
             setStatus(displayIndexFor(idx), str(R.string.status_disconnected))
         }
-        // If idx is in swappingSlots, closeCamera() was called by reopenOnDisplay; leave the
-        // slot intact so onCameraState(OPENED) can find the camera via slotOf().
+        // If idx is in swappingSlots, closeCamera() was called by reopenOnDisplay; if the slot is
+        // disabled, it was called by setPaneEnabled. Either way leave the slot intact so the camera
+        // can be reopened later (onCameraState(OPENED) / re-enable) via slotOf(). A genuine detach
+        // while disabled is still handled by onCameraDetached, which clears the slot.
         runCatching { camera.closeCamera() }
     }
 
@@ -839,6 +875,12 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         FileLogger.log("onCameraState code=$code msg=$msg dev=${desc(self.getUsbDevice())}")
         val idx = slotOf(self)
         if (idx < 0) return
+        if (isSlotDisabled(idx)) {
+            // The close came from the user disabling this pane; don't report it as an error or
+            // schedule a reopen. The pane is collapsed (or shows "Camera off" if both are off).
+            setStatus(displayIndexFor(idx), str(R.string.status_camera_off))
+            return
+        }
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
                 reopenAttempts[idx] = 0
@@ -1089,6 +1131,9 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         // fromUser=false it writes no prefs — the setters above/below are the commits.
         root.findViewById<SeekBar>(R.id.gapSlider)?.progress = 0
         if (swapped) performSwap()
+        // Re-enable both cameras; checking a currently-unchecked box fires its listener, which
+        // reopens the camera and restores the pane layout (a no-op for already-enabled panes).
+        enableChecks?.forEach { it.isChecked = true }
 
         val ctx = requireContext()
         SpatialControls.setHeadFollowEnabled(ctx, SpatialControls.DEFAULT_HEAD_FOLLOW)
@@ -1212,6 +1257,93 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         spacer.layoutParams = lp
     }
 
+    // --- enable / disable per pane ---------------------------------------------
+
+    /** True if the display pane currently showing this logical slot is disabled by the user. */
+    private fun isSlotDisabled(logicalIdx: Int): Boolean = !enabled[displayIndexFor(logicalIdx)]
+
+    /**
+     * Turns a display pane on or off. Disabling closes that pane's camera (kept in its slot for a
+     * later re-enable) and collapses its container so the other pane fills the view; enabling grows
+     * it back and reopens the camera. Uses the same close-then-open lifecycle as swap/detach rather
+     * than reparenting a TextureView, so no SurfaceTexture is orphaned.
+     */
+    private fun setPaneEnabled(displayIdx: Int, value: Boolean) {
+        if (enabled[displayIdx] == value) return
+        enabled[displayIdx] = value
+        FileLogger.log("pane $displayIdx enabled -> $value")
+        saveEnabled()
+        updatePaneVisibility()
+
+        val logicalIdx = displayIndexFor(displayIdx)  // displayIndexFor is its own inverse
+        val camera = slots[logicalIdx] ?: return
+        if (value) {
+            reopenAfterEnable(camera, logicalIdx)
+        } else {
+            // Recording holds the camera's encoder open; disabling would truncate its file, so stop
+            // cleanly first (mirrors performSwap).
+            if (recording) stopRecording()
+            // isSlotDisabled(logicalIdx) is now true, so onCameraDisConnected/onCameraState keep the
+            // slot and report "Camera off" instead of an error.
+            setStatus(displayIdx, str(R.string.status_camera_off))
+            runCatching { camera.closeCamera() }
+                .onFailure { FileLogger.log("disable closeCamera slot=$logicalIdx failed", it) }
+        }
+    }
+
+    /** Reopens a camera whose pane was just re-enabled, after letting its container relayout. */
+    private fun reopenAfterEnable(camera: MultiCameraClient.Camera, logicalIdx: Int) {
+        val displayIdx = displayIndexFor(logicalIdx)
+        setStatus(displayIdx, str(R.string.status_connecting))
+        // The container just became visible; give it a moment to lay out and (re)create the
+        // TextureView's SurfaceTexture before opening onto it.
+        mainHandler.postDelayed({
+            if (slots[logicalIdx] != camera || isSlotDisabled(logicalIdx)) return@postDelayed
+            try {
+                FileLogger.log("re-enable reopen slot=$logicalIdx -> display=$displayIdx")
+                camera.setCameraStateCallBack(this)
+                camera.openCamera(textures[displayIdx], buildRequest())
+                setStatus(displayIdx, str(R.string.status_opening))
+            } catch (t: Throwable) {
+                FileLogger.log("re-enable reopen slot=$logicalIdx FAILED", t)
+                setStatus(displayIdx, str(R.string.status_error, t.message ?: "reopen threw"))
+            }
+        }, SWAP_REOPEN_DELAY_MS)
+    }
+
+    /**
+     * Shows/hides pane containers so a single enabled pane fills the whole view. Both enabled or
+     * both disabled -> 50/50 with the passthrough gap; exactly one enabled -> the other collapses
+     * and the gap is suppressed so the survivor fills the surface.
+     */
+    private fun updatePaneVisibility() {
+        if (!::panes.isInitialized) return
+        val enabledCount = enabled.count { it }
+        for (d in 0 until SLOT_COUNT) {
+            // Collapse a disabled pane only when the other pane is filling the view; if both are
+            // off, keep both visible so each can show its "Camera off" overlay.
+            val visible = enabled[d] || enabledCount == 0
+            panes[d].visibility = if (visible) View.VISIBLE else View.GONE
+            if (!enabled[d] && enabledCount == 0) setStatus(d, str(R.string.status_camera_off))
+        }
+        // No gap between panes when only one is showing (it would push the survivor off-center).
+        gapSpacer?.visibility = if (enabledCount == 1) View.GONE else View.VISIBLE
+    }
+
+    private fun loadEnabled() {
+        val prefs = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        enabled[0] = prefs.getBoolean(PREF_ENABLED_LEFT, true)
+        enabled[1] = prefs.getBoolean(PREF_ENABLED_RIGHT, true)
+    }
+
+    private fun saveEnabled() {
+        requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_ENABLED_LEFT, enabled[0])
+            .putBoolean(PREF_ENABLED_RIGHT, enabled[1])
+            .apply()
+    }
+
     private fun buildRequest(): CameraRequest =
         CameraRequest.Builder()
             .setPreviewWidth(PREVIEW_WIDTH)
@@ -1246,6 +1378,7 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         settingsScroll = null
         settingsScrim = null
         settingsToggle = null
+        enableChecks = null
         statusReadout = null
         statusReadoutLeft = null
         statusReadoutRight = null
@@ -1430,6 +1563,8 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val PREF_FLIP_H = "flip_horizontal"
         private const val PREF_GAP_PCT = "pane_gap_pct"
         private const val PREF_COMPOSITE_MODE = "record_composite"
+        private const val PREF_ENABLED_LEFT = "pane_enabled_left"
+        private const val PREF_ENABLED_RIGHT = "pane_enabled_right"
         private const val MAX_GAP_WEIGHT = 2f         // gap slider at 100% = gap takes half the row
         private const val MAX_GAP_WEIGHT_STEREO = 0.5f // stereo: gap is a divergence trim, keep small
         private const val SWAP_REOPEN_DELAY_MS = 300L
