@@ -1112,13 +1112,22 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
                 // is assigned, so checking view == null here would abort on the very first tick.
                 if (statusReadout == null) return
                 val time = timeFormat.format(Date())
-                val battery = requireContext().getSystemService(BatteryManager::class.java)
+                val batteryManager = requireContext().getSystemService(BatteryManager::class.java)
+                val battery = batteryManager
                     ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val charging = batteryManager?.isCharging == true
                 val base = if (battery != null && battery in 0..100) "$time  $battery%" else time
                 val text = if (recording) "⏺ $base" else base
                 statusReadout?.text = text
                 statusReadoutLeft?.text = text
                 statusReadoutRight?.text = text
+                // White charging bolt right after the percent (an end compound drawable, so it
+                // inherits no emoji color). Only when charging and a percent is showing.
+                val bolt = if (charging && battery != null && battery in 0..100)
+                    R.drawable.ic_charging_bolt else 0
+                statusReadout?.setCompoundDrawablesWithIntrinsicBounds(0, 0, bolt, 0)
+                statusReadoutLeft?.setCompoundDrawablesWithIntrinsicBounds(0, 0, bolt, 0)
+                statusReadoutRight?.setCompoundDrawablesWithIntrinsicBounds(0, 0, bolt, 0)
                 mainHandler.postDelayed(this, STATUS_READOUT_INTERVAL_MS)
             }
         }
