@@ -93,14 +93,29 @@ class ImmersiveActivity : AppSystemActivity() {
         systemManager.registerSystem(
             HeadFollowSystem(
                 panelEntity = { panelEntity },
-                // Paused only while a curve morph animation is running — see followSuspendedUntil.
+                // Paused while a curve morph animation is running (see followSuspendedUntil) OR while
+                // a head-cursor session is active — the cursor needs the panel to stay put in space
+                // so head rotation sweeps the crosshair across it instead of dragging the panel.
                 isEnabled = {
-                    headFollowEnabled &&
+                    headFollowEnabled && !HeadCursorBridge.active &&
                         DataModel.getLocalDataModelTime() >= followSuspendedUntil
                 },
                 distance = { panelDistance },
                 isSmoothing = { smoothingEnabled },
                 backOffset = { curveRadius * panelScale },
+            )
+        )
+
+        // Head-shake gesture + gaze-projected menu cursor. Reads the same head pose as
+        // HeadFollowSystem and writes cursor state to HeadCursorBridge for the panel UI to consume.
+        systemManager.registerSystem(
+            HeadCursorSystem(
+                panelEntity = { panelEntity },
+                panelHalfExtents = {
+                    val stereo = SpatialControls.isStereoEnabled(this)
+                    val widthM = if (stereo) STEREO_WIDTH_M else BASE_WIDTH_M
+                    Pair(widthM * panelScale / 2f, BASE_HEIGHT_M * panelScale / 2f)
+                },
             )
         )
 

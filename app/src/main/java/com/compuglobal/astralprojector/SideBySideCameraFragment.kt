@@ -183,6 +183,18 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
     private var stereoGearRow: View? = null
     private var stereoHalves: List<View> = emptyList()
 
+    // Head-tracked menu cursor (driven by HeadCursorSystem via HeadCursorBridge). A ~60Hz ticker
+    // (idle-polls slower) opens/closes a session on the shake gesture, moves the reticle to the
+    // gaze/panel intersection, and dwell-clicks buttons.
+    private var crosshairView: CrosshairView? = null
+    private var headCursorActive = false
+    private var lastGestureEpoch = 0
+    // The button the reticle is currently over, and when it landed there (for the dwell timer).
+    private var hoverTarget: View? = null
+    private var hoverStartMs = 0L
+    // A target already dwell-clicked stays disarmed until the reticle leaves it (no auto-repeat).
+    private var hoverArmedTarget: View? = null
+
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         FileLogger.log("getRootView")
         // Cache the application context so status-string lookups from AUSBC camera callbacks don't
@@ -225,6 +237,14 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         statusReadoutLeft = root.findViewById(R.id.statusReadoutLeft)
         statusReadoutRight = root.findViewById(R.id.statusReadoutRight)
         startStatusReadoutTicker()
+
+        // Head cursor: clear any stale session state left over from a previous panel instance (a
+        // stereo toggle / recreation replaces this fragment) so head-follow isn't stuck paused,
+        // then start the ticker that reacts to the shake gesture and drives the reticle.
+        crosshairView = root.findViewById(R.id.crosshair)
+        HeadCursorBridge.reset()
+        lastGestureEpoch = HeadCursorBridge.gestureEpoch
+        startHeadCursorTicker()
 
         root.findViewById<TextView>(R.id.buildTimestamp).text =
             str(R.string.build_time_label,
@@ -1105,6 +1125,150 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         tick.run()
     }
 
+    // --- head-tracked menu cursor -----------------------------------------------
+    //
+    // A left-right head shake (detected scene-side by HeadCursorSystem) toggles a "head cursor"
+    // session: head-follow pauses so the panel freezes in space, the settings menu opens, and a
+    // gaze-tracked reticle appears at the centre of vision. Dwelling the reticle on a button for
+    // DWELL_MS clicks it (via performClick, the same path the controller uses); sliders are
+    // ignored. Closing the menu (dwell the gear, controller B, or shake again) ends the session
+    // and head-follow resumes.
+
+    /** Runs while the view is alive: idle-polls for the shake gesture, ~60Hz while a session runs. */
+    private fun startHeadCursorTicker() {
+        val tick = object : Runnable {
+            override fun run() {
+                if (crosshairView == null) return // torn down in onDestroyView
+                processHeadCursor()
+                mainHandler.postDelayed(this, if (headCursorActive) CURSOR_FRAME_MS else IDLE_POLL_MS)
+            }
+        }
+        tick.run()
+    }
+
+    private fun processHeadCursor() {
+        // Each shake bumps the epoch; a change toggles the session open/closed.
+        val epoch = HeadCursorBridge.gestureEpoch
+        if (epoch != lastGestureEpoch) {
+            lastGestureEpoch = epoch
+            if (headCursorActive) endHeadCursorSession() else startHeadCursorSession()
+        }
+        if (!headCursorActive) return
+        // The menu was closed some other way (e.g. dwell-clicking the gear, which toggles it):
+        // end the session so head-follow resumes and the reticle disappears.
+        if (!isSettingsVisible()) {
+            endHeadCursorSession()
+            return
+        }
+        updateHeadCursor()
+    }
+
+    private fun startHeadCursorSession() {
+        headCursorActive = true
+        HeadCursorBridge.active = true // pauses HeadFollowSystem so the panel stays put
+        if (!isSettingsVisible()) setSettingsVisible(true)
+        resetHover()
+        crosshairView?.setStereoSplit(stereoOn)
+        crosshairView?.visibility = View.VISIBLE
+        FileLogger.log("head-cursor: session started (stereo=$stereoOn)")
+    }
+
+    private fun endHeadCursorSession() {
+        headCursorActive = false
+        HeadCursorBridge.active = false
+        crosshairView?.visibility = View.GONE
+        resetHover()
+        if (isSettingsVisible()) setSettingsVisible(false)
+        FileLogger.log("head-cursor: session ended")
+    }
+
+    private fun resetHover() {
+        hoverTarget = null
+        hoverArmedTarget = null
+        hoverStartMs = 0L
+    }
+
+    /** Moves the reticle to the gaze/panel point and runs the dwell timer against the button under it. */
+    private fun updateHeadCursor() {
+        val root = view ?: return
+        val cross = crosshairView ?: return
+        val rw = root.width
+        val rh = root.height
+        if (rw == 0 || rh == 0) return
+
+        if (!HeadCursorBridge.onPanel) {
+            // Gaze is off the panel — there's no surface to draw the reticle on. Hide + disarm.
+            if (cross.visibility != View.GONE) cross.visibility = View.GONE
+            hoverTarget = null
+            hoverStartMs = 0L
+            return
+        }
+        if (cross.visibility != View.VISIBLE) cross.visibility = View.VISIBLE
+
+        val u = HeadCursorBridge.cursorU
+        val v = HeadCursorBridge.cursorV
+        // In stereo the surface is a LeftRight pair; hit-test against the left copy (u across its
+        // half), matching how barItems() and the pointer remap treat the left copy as interactive.
+        val half = if (stereoOn) rw / 2f else rw.toFloat()
+        val px = u * half
+        val py = v * rh
+        val target = hitTestHover(root, px, py)
+
+        // Re-arm only once the reticle has left the button it last clicked (no auto-repeat).
+        if (hoverArmedTarget != null && target !== hoverArmedTarget) hoverArmedTarget = null
+
+        val now = System.currentTimeMillis()
+        if (target !== hoverTarget) {
+            hoverTarget = target
+            hoverStartMs = now
+        }
+        var progress = 0f
+        if (target != null && target !== hoverArmedTarget) {
+            progress = ((now - hoverStartMs).toFloat() / DWELL_MS).coerceIn(0f, 1f)
+            if (progress >= 1f) {
+                FileLogger.log("head-cursor: dwell-click ${resName(target)}")
+                target.performClick()
+                hoverArmedTarget = target // must leave before it can fire again
+                hoverStartMs = now
+                progress = 0f
+            }
+        }
+        cross.setCursor(u, v, progress)
+    }
+
+    private val hoverHitLoc = IntArray(2)
+    private val hoverRootLoc = IntArray(2)
+
+    /** Topmost clickable TextView/CheckBox (never a SeekBar) whose bounds contain (px, py). */
+    private fun hitTestHover(root: View, px: Float, py: Float): View? {
+        root.getLocationInWindow(hoverRootLoc)
+        val candidates = ArrayList<View>()
+        collectHoverTargets(root, candidates)
+        var hit: View? = null
+        for (c in candidates) {
+            c.getLocationInWindow(hoverHitLoc)
+            val left = (hoverHitLoc[0] - hoverRootLoc[0]).toFloat()
+            val top = (hoverHitLoc[1] - hoverRootLoc[1]).toFloat()
+            if (px >= left && px <= left + c.width && py >= top && py <= top + c.height) {
+                hit = c // keep the last match — later siblings draw on top
+            }
+        }
+        return hit
+    }
+
+    private fun collectHoverTargets(v: View, out: MutableList<View>) {
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) collectHoverTargets(v.getChildAt(i), out)
+        }
+        // TextView covers the button labels and (via Button) the CheckBoxes; SeekBar is not a
+        // TextView, so sliders are excluded from the hover feature as required. isShown skips
+        // controls hidden behind a collapsed column (e.g. the mono menu while in stereo).
+        if (v is TextView && v.isClickable && v.isShown) out.add(v)
+    }
+
+    private fun resName(v: View): String =
+        runCatching { resources.getResourceEntryName(v.id) }.getOrDefault("view")
+
     /**
      * Restores every setting to its default: the pane prefs this fragment owns (rotation, flip,
      * aspect, gap, swap) and the shared spatial controls (whose setters fire ImmersiveActivity's
@@ -1385,6 +1549,11 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         stereoOverlay = null
         stereoGearRow = null
         stereoHalves = emptyList()
+        // Drop any active head-cursor session so head-follow isn't left paused after teardown; the
+        // ticker stops on its own once crosshairView is null (and via removeCallbacksAndMessages).
+        crosshairView = null
+        headCursorActive = false
+        HeadCursorBridge.active = false
         mainHandler.removeCallbacksAndMessages(null)
         dumpThread?.quitSafely()
         dumpThread = null
@@ -1576,5 +1745,10 @@ class SideBySideCameraFragment : MultiCameraFragment(), ICameraStateCallBack {
         private const val STICK_REPEAT_MS = 250L      // min gap between stick-driven focus moves
         private const val SEEKBAR_STEP = 5            // progress units per D-pad/stick nudge
         private const val STATUS_READOUT_INTERVAL_MS = 1000L
+
+        // Head-cursor tuning.
+        private const val DWELL_MS = 3000f            // hover time on a button before it clicks
+        private const val CURSOR_FRAME_MS = 16L       // reticle refresh while a session is active
+        private const val IDLE_POLL_MS = 100L         // gesture poll rate while idle (cheap)
     }
 }

@@ -180,4 +180,9 @@
             <include layout="@layout/stereo_settings" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" />
         </FrameLayout>
     </LinearLayout>
+
+    <!-- Head-tracked menu cursor. Drawn last so it sits over everything (settings column, stereo
+         overlay). Non-clickable / non-focusable, so it never intercepts the pointer or controller
+         focus from the buttons underneath; hidden until a head-shake opens the head-cursor menu. -->
+    <com.compuglobal.astralprojector.CrosshairView android:id="@+id/crosshair" android:layout_width="match_parent" android:layout_height="match_parent" android:clickable="false" android:focusable="false" android:visibility="gone" />
 </FrameLayout>
